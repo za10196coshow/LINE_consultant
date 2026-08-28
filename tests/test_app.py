@@ -1,3 +1,4 @@
+from app.ai.budget import ApiBudgetExceeded
 from app.ai.client import OpenAITimeoutExhausted
 from app.main import service
 from app.models import Action, Availability, Decision, Fact, PreferenceUpdate, VenueCandidate, VenueSearchResult
@@ -207,3 +208,22 @@ def test_web_search_failure_pushes_natural_message_without_raw_error(post_webhoo
     assert "APITimeoutError" not in pushes[0]
     assert "{" not in pushes[0]
     assert "http" not in pushes[0]
+
+
+def test_budget_limit_pushes_fixed_message_once_without_other_ai_calls(post_webhook, event_factory, monkeypatch):
+    pushes = []
+    calls = 0
+    monkeypatch.setattr(service.line, "display_name", lambda *_: "A")
+    monkeypatch.setattr(service.line, "push", lambda target, text: pushes.append((target, text)) or True)
+
+    def blocked(*_):
+        nonlocal calls
+        calls += 1
+        raise ApiBudgetExceeded
+
+    monkeypatch.setattr(service.ai, "decide", blocked)
+    assert post_webhook(event_factory(message_id="budget-1")).status_code == 200
+    assert post_webhook(event_factory(message_id="budget-2")).status_code == 200
+
+    assert calls == 2
+    assert pushes == [("G1", "今日はAI幹事ちょっと働きすぎたので、続きは明日で🙏")]

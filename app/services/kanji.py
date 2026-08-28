@@ -1,6 +1,7 @@
 import logging
 import time
 
+from app.ai.budget import ApiBudgetExceeded
 from app.ai.client import AIClient, OpenAITimeoutExhausted
 from app.line.client import LineClient
 from app.models import Action
@@ -33,6 +34,18 @@ class KanjiService:
         message_text = message.get("text", "")
         try:
             decision = self.ai.decide(message_text, display_name, context)
+        except ApiBudgetExceeded:
+            self.db.add_message(
+                conversation_id,
+                context["event"]["id"] if context.get("event") else None,
+                user_id,
+                display_name,
+                message_text,
+                message_id,
+                int(event.get("timestamp", 0)),
+            )
+            self._notify_budget_limit(conversation_id)
+            return
         except OpenAITimeoutExhausted:
             notify_timeout = self._should_notify_timeout(message_text)
             self.db.add_message(
@@ -79,11 +92,19 @@ class KanjiService:
                 criteria.budget_max or criteria.budget_min or "unknown",
                 criteria.genre or "unknown",
             )
-            search_result = self.ai.search(criteria, message_text)
+            try:
+                search_result = self.ai.search(criteria, message_text)
+            except ApiBudgetExceeded:
+                self._notify_budget_limit(conversation_id)
+                return
             if search_result:
                 logger.info("SEARCH_VENUE candidates=%d", search_result.venues_found)
                 logger.info("SEARCH_VENUE rendering reply")
-                reply = self.ai.render_venue_reply(criteria, search_result.candidates, message_text)
+                try:
+                    reply = self.ai.render_venue_reply(criteria, search_result.candidates, message_text)
+                except ApiBudgetExceeded:
+                    self._notify_budget_limit(conversation_id)
+                    return
                 logger.info("SEARCH_VENUE reply generated")
             else:
                 logger.warning("web_search failed after retry")
@@ -102,3 +123,8 @@ class KanjiService:
     def _should_notify_timeout(message: str) -> bool:
         cues = ("?", "？", "どう", "どんな", "まとめ", "教えて", "探して", "提案", "候補", "企画", "お願い", "決め", "今ど")
         return any(cue in message for cue in cues)
+
+    def _notify_budget_limit(self, conversation_id: str) -> None:
+        date_jst = self.ai.budget.date_jst
+        if self.db.claim_budget_notification(date_jst, conversation_id):
+            self.line.push(conversation_id, "今日はAI幹事ちょっと働きすぎたので、続きは明日で🙏")

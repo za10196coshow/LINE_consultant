@@ -2,9 +2,22 @@ import httpx
 import pytest
 from openai import APITimeoutError
 
+from app.ai.budget import ApiBudget
 from app.ai.client import AIClient, OpenAITimeoutExhausted
 from app.models import Action, Decision, VenueCandidate, VenueCandidatePayload, VenueSearchCriteria
 from app.prompts.system import BOT_PERSONA, KANJI_PROMPT, VENUE_REPLY_PROMPT
+from app.repositories.database import Database
+
+
+def make_ai(**kwargs):
+    return AIClient(
+        "test",
+        "gpt-5-mini",
+        "幹事",
+        "Asia/Tokyo",
+        budget=ApiBudget(Database(":memory:"), 100, 90, 150),
+        **kwargs,
+    )
 
 
 class BrokenResponses:
@@ -17,7 +30,7 @@ class BrokenOpenAI:
 
 
 def test_openai_exception_returns_ignore():
-    ai = AIClient("test", "gpt-5-mini", "幹事", "Asia/Tokyo")
+    ai = make_ai()
     ai.client = BrokenOpenAI()
     assert ai.decide("雑談", "A", {}).action == Action.IGNORE
 
@@ -46,14 +59,14 @@ def timeout_error():
 
 
 def test_openai_normal_response():
-    ai = AIClient("test", "gpt-5-mini", "幹事", "Asia/Tokyo")
+    ai = make_ai()
     ai.client = ValidOpenAI()
     assert ai.decide("今どんな感じ？", "A", {}).action == Action.REPLY
     assert ai.client.responses.calls == 1
 
 
 def test_client_uses_explicit_timeout_without_hidden_sdk_retries():
-    ai = AIClient("test", "gpt-5-mini", "幹事", "Asia/Tokyo", timeout_seconds=45, search_timeout_seconds=75)
+    ai = make_ai(timeout_seconds=45, search_timeout_seconds=75)
     assert ai.client.timeout == 45
     assert ai.client.max_retries == 0
     assert ai.search_client.timeout == 75
@@ -77,7 +90,7 @@ class TimeoutThenSuccessOpenAI:
 
 
 def test_timeout_then_retry_success():
-    ai = AIClient("test", "gpt-5-mini", "幹事", "Asia/Tokyo")
+    ai = make_ai()
     ai.client = TimeoutThenSuccessOpenAI()
     assert ai.decide("19日行ける", "A", {}).action == Action.REMEMBER_ONLY
     assert ai.client.responses.calls == 2
@@ -98,7 +111,7 @@ class AlwaysTimeoutOpenAI:
 
 
 def test_timeout_retry_also_fails():
-    ai = AIClient("test", "gpt-5-mini", "幹事", "Asia/Tokyo")
+    ai = make_ai()
     ai.client = AlwaysTimeoutOpenAI()
     with pytest.raises(OpenAITimeoutExhausted):
         ai.decide("今どんな感じ？", "A", {})
@@ -122,7 +135,7 @@ class RecoveringOpenAI:
 
 
 def test_truncated_structured_output_retries_with_larger_budget():
-    ai = AIClient("test", "gpt-5-mini", "幹事", "Asia/Tokyo")
+    ai = make_ai()
     ai.client = RecoveringOpenAI()
 
     decision = ai.decide("19日なら行ける", "田中", {})
@@ -179,7 +192,7 @@ class WebOpenAI:
 
 
 def test_web_search_uses_builtin_tool_sources_and_removes_invented_url():
-    ai = AIClient("test", "gpt-5-mini", "幹事", "Asia/Tokyo")
+    ai = make_ai()
     ai.search_client = WebOpenAI([WebSearchResponse()])
     criteria = VenueSearchCriteria(location="横浜", party_size=5, budget_max=5000, genre="焼肉")
 
@@ -199,7 +212,7 @@ def test_web_search_uses_builtin_tool_sources_and_removes_invented_url():
 
 
 def test_web_search_timeout_retries_once_then_succeeds():
-    ai = AIClient("test", "gpt-5-mini", "幹事", "Asia/Tokyo")
+    ai = make_ai()
     ai.search_client = WebOpenAI([timeout_error(), WebSearchResponse()])
 
     assert ai.search(VenueSearchCriteria(location="横浜"), "店探して") is not None
@@ -207,7 +220,7 @@ def test_web_search_timeout_retries_once_then_succeeds():
 
 
 def test_web_search_timeout_retry_failure_returns_none():
-    ai = AIClient("test", "gpt-5-mini", "幹事", "Asia/Tokyo")
+    ai = make_ai()
     ai.search_client = WebOpenAI([timeout_error(), timeout_error()])
 
     assert ai.search(VenueSearchCriteria(location="横浜"), "店探して") is None
@@ -253,7 +266,7 @@ def test_three_candidates_render_as_character_reply_not_urls_only():
         "② 焼肉B\n少し落ち着いた感じ\nhttps://venue.example/b\n"
         "③ 焼肉C\nワイワイ向き\nhttps://venue.example/c\n俺なら①かな。"
     )
-    ai = AIClient("test", "gpt-5-mini", "幹事", "Asia/Tokyo")
+    ai = make_ai()
     ai.client = RenderOpenAI([generated])
 
     reply = ai.render_venue_reply(VenueSearchCriteria(location="横浜"), candidates, "店探して")
@@ -267,7 +280,7 @@ def test_three_candidates_render_as_character_reply_not_urls_only():
 def test_one_candidate_reply_has_name_description_and_exact_url():
     candidates = venue_candidates(1)
     generated = "今のところここがよさそう。\n焼肉A\n駅近で集まりやすい。\nhttps://venue.example/a\nもう少し広げる？"
-    ai = AIClient("test", "gpt-5-mini", "幹事", "Asia/Tokyo")
+    ai = make_ai()
     ai.client = RenderOpenAI([generated])
 
     reply = ai.render_venue_reply(VenueSearchCriteria(location="横浜"), candidates, "店探して")
@@ -279,7 +292,7 @@ def test_one_candidate_reply_has_name_description_and_exact_url():
 
 def test_zero_candidates_reply_is_natural_japanese_without_url():
     generated = "今の条件だと、これって店がうまく拾えなかった🙏\n駅を少し広げて探してみる？"
-    ai = AIClient("test", "gpt-5-mini", "幹事", "Asia/Tokyo")
+    ai = make_ai()
     ai.client = RenderOpenAI([generated])
 
     reply = ai.render_venue_reply(VenueSearchCriteria(location="横浜"), [], "店探して")
@@ -292,7 +305,7 @@ def test_zero_candidates_reply_is_natural_japanese_without_url():
 def test_changed_or_invented_url_is_rejected_and_fallback_keeps_exact_urls():
     candidates = venue_candidates(1)
     generated = "焼肉Aはここ！\nhttps://fake.example/invented"
-    ai = AIClient("test", "gpt-5-mini", "幹事", "Asia/Tokyo")
+    ai = make_ai()
     ai.client = RenderOpenAI([generated])
 
     reply = ai.render_venue_reply(VenueSearchCriteria(location="横浜"), candidates, "店探して")
@@ -306,7 +319,7 @@ def test_changed_or_invented_url_is_rejected_and_fallback_keeps_exact_urls():
 def test_url_only_generated_reply_is_rejected():
     candidates = venue_candidates()
     generated = "\n".join(candidate.url for candidate in candidates)
-    ai = AIClient("test", "gpt-5-mini", "幹事", "Asia/Tokyo")
+    ai = make_ai()
     ai.client = RenderOpenAI([generated])
 
     reply = ai.render_venue_reply(VenueSearchCriteria(location="横浜"), candidates, "店探して")
@@ -318,7 +331,7 @@ def test_url_only_generated_reply_is_rejected():
 
 def test_reply_generation_error_returns_character_fallback_not_exception_data():
     candidates = venue_candidates(1)
-    ai = AIClient("test", "gpt-5-mini", "幹事", "Asia/Tokyo")
+    ai = make_ai()
     ai.client = RenderOpenAI([RuntimeError('{"internal":"raw error"}')])
 
     reply = ai.render_venue_reply(VenueSearchCriteria(location="横浜"), candidates, "店探して")

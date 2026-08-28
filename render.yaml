@@ -17,6 +17,12 @@ services:
         value: 45
       - key: OPENAI_SEARCH_TIMEOUT_SECONDS
         value: 75
+      - key: DAILY_API_BUDGET_JPY
+        value: 100
+      - key: DAILY_API_STOP_THRESHOLD_JPY
+        value: 90
+      - key: USD_JPY_RATE
+        value: 150
       - key: DATABASE_PATH
         value: /opt/render/project/src/data/kanji.db
       - key: LINE_CHANNEL_SECRET

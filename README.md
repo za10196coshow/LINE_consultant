@@ -11,6 +11,7 @@ LINEグループの会話から、企画、日程、参加可否、場所、予�
 - 日本時間を明示した自然な日付解釈と `yes / no / maybe / unknown` 保存
 - 直近10件＋構造化状態だけをAIへ渡す省コスト設計
 - 必要時だけWeb Searchを使う実在候補検索
+- JST日次API予算（100円、90円で新規OpenAI呼び出し停止）
 - SQLite、FastAPI、pytest、Render Blueprint対応
 
 ## 構成
@@ -82,6 +83,9 @@ pytest -q
 | `OPENAI_MODEL` | 任意 | `gpt-5-mini`。利用可能モデルへ変更可能 |
 | `OPENAI_TIMEOUT_SECONDS` | 任意 | `45`。OpenAI 1回あたりの待機上限（秒） |
 | `OPENAI_SEARCH_TIMEOUT_SECONDS` | 任意 | `75`。Web Search 1回あたりの待機上限（秒） |
+| `DAILY_API_BUDGET_JPY` | 任意 | `100`。管理上の日次API予算（円） |
+| `DAILY_API_STOP_THRESHOLD_JPY` | 任意 | `90`。この推定日次額以上では新しいOpenAI呼び出しを禁止 |
+| `USD_JPY_RATE` | 任意 | `150`。推定料金の固定USD/JPY換算レート |
 | `DATABASE_PATH` | 任意 | `data/kanji.db` |
 | `AI_KANJI_NAME` | 任意 | `幹事` |
 | `LOG_LEVEL` | 任意 | `INFO` |
@@ -105,6 +109,16 @@ OpenAIクライアントのタイムアウトは既定45秒です。SDKの自動
 
 追加のAPIキーは不要で、既存の `OPENAI_API_KEY` を使います。ただし、Web Searchのモデル利用・ツール呼び出しにはOpenAI API利用料金が発生し得ます。検索時だけ呼び出すことで不要なコストを抑えています。
 
+## 日次OpenAI API予算
+
+すべてのResponses API呼び出し（Decision、Structured Output、Timeout retry、Web Search、店舗検索の最終返信生成）は共通のBudget Guardを通ります。日本時間の日付ごとにSQLiteの `daily_api_usage` へ、入力・出力・キャッシュ入力トークン、リクエスト数、Web Search回数、モデル、USD/JPY推定額を累積保存します。
+
+既定では日次予算を100円、停止ラインを90円とします。当日の推定額が90円以上なら、次のOpenAI API呼び出しを実行しません。呼び出し前が90円未満ならその1回は実行し、レスポンスのusageを加算した結果90円を超えた場合は、その次から停止します。翌日の0:00（`Asia/Tokyo`）になると新しい日付行を使うため自動再開します。
+
+停止中の通知文はOpenAIで生成せず、コード内の固定文を同一グループ・同一JST日につき1回だけPushします。その後は翌日まで無反応です。現在額、停止ライン、残額、リクエスト数、トークン数、Web Search回数は `API_BUDGET`、`API_USAGE`、`WEB_SEARCH_USAGE` ログで確認できます。認証なしの利用額公開エンドポイントは設けていません。
+
+料金はOpenAIレスポンスのusageと設定済み単価から算出する**推定値**です。既定モデル `gpt-5-mini` は入力 `$0.25 / 1M tokens`、キャッシュ入力 `$0.025 / 1M tokens`、出力 `$2.00 / 1M tokens`、Web Searchは `$0.01 / call` として一元管理しています。料金改定やモデル変更時は `app/ai/budget.py` の単価表も更新してください。usageが返らないTimeout・通信失敗はリクエスト数には記録しますが、正確なトークン料金を加算できない点に注意してください。
+
 ## Pythonバージョン
 
 Pythonは `.python-version`、`render.yaml` の `PYTHON_VERSION`、`pyproject.toml` の `requires-python` の3箇所で `3.12.7` / Python 3.12系に固定しています。起動時にも3.12系以外なら明示的に停止します。既存サービスをBlueprintで作成していない場合は、Render Dashboardの **Environment** で `PYTHON_VERSION=3.12.7` を設定し、**Clear build cache & deploy** を実行してください。デプロイログの `Using Python version 3.12.7` を確認します。
@@ -112,6 +126,8 @@ Pythonは `.python-version`、`render.yaml` の `PYTHON_VERSION`、`pyproject.to
 ## SQLiteとRender無料環境の重要な制約
 
 Renderのサービス実行ファイルシステムは一時的です。再デプロイ、再起動、インスタンス交換などでSQLiteデータが消える可能性があります。また複数インスタンスから単一SQLiteを安全に共有できません。第一版の試用には使えますが、データを残す本運用ではRender Persistent Disk（対応プランで `DATABASE_PATH` をマウント先へ変更）またはPostgreSQLへ移行してください。DBアクセスをrepositoryへ分離しているため移行範囲を限定できます。
+
+この制約は日次API予算データにも適用されます。現在の無料プランと `/opt/render/project/src/data/kanji.db` の組み合わせでは、再デプロイ後も90円停止状態を保持できる保証がありません。費用上限を安全装置として本番利用するには、Render Persistent Diskを `/var/data` 等へマウントして `DATABASE_PATH=/var/data/kanji.db` に変更するか、PostgreSQLへ移行してください。永続ストレージなしではOpenAI Platform側のProject Budget/Usage Limitも併用してください。
 
 ## トラブルシューティング
 

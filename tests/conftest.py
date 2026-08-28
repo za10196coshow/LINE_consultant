@@ -12,6 +12,7 @@ os.environ.setdefault("DATABASE_PATH", ":memory:")
 import pytest
 from fastapi.testclient import TestClient
 
+from app.ai.budget import ApiBudget
 from app.main import app, service
 from app.repositories.database import Database
 
@@ -20,6 +21,7 @@ from app.repositories.database import Database
 def fresh_db(monkeypatch):
     database = Database(":memory:")
     monkeypatch.setattr(service, "db", database)
+    monkeypatch.setattr(service.ai, "budget", ApiBudget(database, 100, 90, 150))
     return database
 
 

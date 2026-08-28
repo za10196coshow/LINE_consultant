@@ -7,6 +7,7 @@ import sys
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 
+from app.ai.budget import ApiBudget
 from app.ai.client import AIClient
 from app.config import get_settings
 from app.line.client import LineClient
@@ -21,6 +22,13 @@ logging.basicConfig(
 )
 settings.ensure_database_directory()
 db = Database(settings.database_path)
+api_budget = ApiBudget(
+    db,
+    settings.daily_api_budget_jpy,
+    settings.daily_api_stop_threshold_jpy,
+    settings.usd_jpy_rate,
+    settings.timezone,
+)
 service = KanjiService(
     db,
     AIClient(
@@ -30,6 +38,7 @@ service = KanjiService(
         settings.timezone,
         settings.openai_timeout_seconds,
         settings.openai_search_timeout_seconds,
+        api_budget,
     ),
     LineClient(settings.line_channel_access_token),
 )

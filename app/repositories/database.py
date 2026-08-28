@@ -42,6 +42,24 @@ CREATE INDEX IF NOT EXISTS idx_messages_group ON conversation_messages(group_id,
 CREATE TABLE IF NOT EXISTS processed_messages (
  event_key TEXT PRIMARY KEY, message_id TEXT, processed_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS daily_api_usage (
+ date_jst TEXT PRIMARY KEY,
+ cost_usd REAL NOT NULL DEFAULT 0,
+ cost_jpy REAL NOT NULL DEFAULT 0,
+ input_tokens INTEGER NOT NULL DEFAULT 0,
+ output_tokens INTEGER NOT NULL DEFAULT 0,
+ cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+ request_count INTEGER NOT NULL DEFAULT 0,
+ web_search_count INTEGER NOT NULL DEFAULT 0,
+ models TEXT NOT NULL DEFAULT '',
+ updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS api_budget_notifications (
+ date_jst TEXT NOT NULL,
+ group_id TEXT NOT NULL,
+ notified_at TEXT NOT NULL,
+ PRIMARY KEY(date_jst, group_id)
+);
 """
 
 
@@ -62,6 +80,7 @@ class Database:
         conn = self._memory_connection or sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA busy_timeout=5000")
         try:
             yield conn
             conn.commit()
@@ -181,3 +200,68 @@ class Database:
             "preferences": dict(preferences) if preferences else {},
             "recent_messages": recent,
         }
+
+    def daily_api_usage(self, date_jst: str) -> dict:
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM daily_api_usage WHERE date_jst=?", (date_jst,)).fetchone()
+        if row:
+            return dict(row)
+        return {
+            "date_jst": date_jst,
+            "cost_usd": 0.0,
+            "cost_jpy": 0.0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cached_input_tokens": 0,
+            "request_count": 0,
+            "web_search_count": 0,
+            "models": "",
+            "updated_at": "",
+        }
+
+    def add_api_usage(
+        self,
+        date_jst: str,
+        *,
+        model: str,
+        cost_usd: float = 0.0,
+        cost_jpy: float = 0.0,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cached_input_tokens: int = 0,
+        request_count: int = 0,
+        web_search_count: int = 0,
+    ) -> dict:
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT INTO daily_api_usage(date_jst,cost_usd,cost_jpy,input_tokens,output_tokens,cached_input_tokens,"
+                "request_count,web_search_count,models,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(date_jst) DO UPDATE SET "
+                "cost_usd=cost_usd+excluded.cost_usd,cost_jpy=cost_jpy+excluded.cost_jpy,"
+                "input_tokens=input_tokens+excluded.input_tokens,output_tokens=output_tokens+excluded.output_tokens,"
+                "cached_input_tokens=cached_input_tokens+excluded.cached_input_tokens,"
+                "request_count=request_count+excluded.request_count,web_search_count=web_search_count+excluded.web_search_count,"
+                "models=CASE WHEN instr(','||models||',', ','||excluded.models||',') > 0 THEN models "
+                "WHEN models='' THEN excluded.models ELSE models||','||excluded.models END,updated_at=excluded.updated_at",
+                (
+                    date_jst,
+                    cost_usd,
+                    cost_jpy,
+                    input_tokens,
+                    output_tokens,
+                    cached_input_tokens,
+                    request_count,
+                    web_search_count,
+                    model,
+                    now_iso(),
+                ),
+            )
+            return dict(conn.execute("SELECT * FROM daily_api_usage WHERE date_jst=?", (date_jst,)).fetchone())
+
+    def claim_budget_notification(self, date_jst: str, group_id: str) -> bool:
+        with self.connect() as conn:
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO api_budget_notifications(date_jst,group_id,notified_at) VALUES(?,?,?)",
+                (date_jst, group_id, now_iso()),
+            )
+            return cur.rowcount == 1

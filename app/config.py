@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-5-mini"
     openai_timeout_seconds: float = 45.0
     openai_search_timeout_seconds: float = 75.0
+    daily_api_budget_jpy: float = 100.0
+    daily_api_stop_threshold_jpy: float = 90.0
+    usd_jpy_rate: float = 150.0
     database_path: str = "data/kanji.db"
     ai_kanji_name: str = "幹事"
     log_level: str = "INFO"
