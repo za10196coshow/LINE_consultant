@@ -19,6 +19,30 @@ class ConversationAction(str, Enum):
     UNANSWERED_QUESTION = "UNANSWERED_QUESTION"
     WEB_RESEARCH = "WEB_RESEARCH"
     FACT_CHECK = "FACT_CHECK"
+    POTENTIAL_NEED = "POTENTIAL_NEED"
+    PROACTIVE_HELP = "PROACTIVE_HELP"
+
+
+class HelpType(str, Enum):
+    NONE = "NONE"
+    FOOD = "FOOD"
+    WEATHER = "WEATHER"
+    DELAY = "DELAY"
+    TRANSPORT = "TRANSPORT"
+    BATTERY = "BATTERY"
+    DEVICE = "DEVICE"
+    ACTIVITY = "ACTIVITY"
+    NAVIGATION = "NAVIGATION"
+    SAFETY = "SAFETY"
+    OTHER = "OTHER"
+
+
+class HelpLevel(int, Enum):
+    NONE = 0
+    LIGHT = 1
+    ADVICE = 2
+    WEB_RESEARCH = 3
+    ACTIVE_SUPPORT = 4
 
 
 class IssueStatus(str, Enum):
@@ -39,6 +63,10 @@ class ConversationDecision(BaseModel):
     web_search_required: bool = False
     resolves_issue_id: int | None = None
     human_answer_in_progress: bool = False
+    expected_helpfulness: float = Field(default=0.0, ge=0.0, le=1.0)
+    intrusiveness_risk: float = Field(default=1.0, ge=0.0, le=1.0)
+    help_type: HelpType = HelpType.NONE
+    help_level: HelpLevel = HelpLevel.NONE
 
     @model_validator(mode="after")
     def normalize(self):
@@ -47,6 +75,8 @@ class ConversationDecision(BaseModel):
             self.reply_text = None
             self.web_search_required = False
         if self.action in {ConversationAction.WEB_RESEARCH, ConversationAction.FACT_CHECK}:
+            self.web_search_required = True
+        if self.help_level == HelpLevel.WEB_RESEARCH:
             self.web_search_required = True
         return self
 

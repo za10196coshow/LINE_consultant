@@ -7,7 +7,7 @@ from difflib import SequenceMatcher
 from app.ai.budget import ApiBudgetExceeded
 from app.ai.conversation import ConversationAIClient
 from app.line.client import LineClient
-from app.models import ConversationAction, IssueStatus
+from app.models import ConversationAction, HelpLevel, HelpType, IssueStatus
 from app.repositories.database import Database
 from app.services.routing import is_explicit_assistant_call
 
@@ -25,12 +25,14 @@ class ConversationAssistant:
         unanswered_delay_seconds: int = 30,
         unanswered_delay_messages: int = 1,
         confidence_threshold: float = 0.78,
+        proactive_threshold: float = 0.65,
     ):
         self.db, self.ai, self.line, self.bot_name = db, ai, line, bot_name
         self.cooldown_minutes = cooldown_minutes
         self.unanswered_delay_seconds = unanswered_delay_seconds
         self.unanswered_delay_messages = unanswered_delay_messages
         self.confidence_threshold = confidence_threshold
+        self.proactive_threshold = proactive_threshold
 
     def handle(self, event: dict) -> None:
         message = event.get("message", {})
@@ -68,25 +70,44 @@ class ConversationAssistant:
             decision.issue_type or decision.action.value,
             decision.confidence,
         )
+        proactive = decision.action in {ConversationAction.POTENTIAL_NEED, ConversationAction.PROACTIVE_HELP}
+        if proactive:
+            logger.info(
+                "POTENTIAL_NEED_DETECTED help_type=%s confidence=%.2f expected_helpfulness=%.2f",
+                decision.help_type.value,
+                decision.confidence,
+                decision.expected_helpfulness,
+            )
+            threshold = 0.55 if explicit else self.proactive_threshold
+            if decision.confidence < threshold or not decision.reply_required or not self._proactive_helpful(decision):
+                logger.info("PROACTIVE_HELP_SKIPPED reason=low_helpfulness")
+                return
         issue = self._save_issue(conversation_id, message_id, decision)
         if issue["status"] != IssueStatus.OPEN.value or issue.get("last_notified_at"):
             logger.info("CONVERSATION_ASSISTANT_SKIPPED reason=duplicate_or_resolved")
             return
         threshold = 0.55 if explicit else self.confidence_threshold
-        if decision.confidence < threshold or not decision.reply_required:
+        if not proactive and (decision.confidence < threshold or not decision.reply_required):
             logger.info("CONVERSATION_ASSISTANT_SKIPPED reason=low_confidence_or_reply_not_required")
             return
         if decision.human_answer_in_progress:
             logger.info("CONVERSATION_ASSISTANT_SKIPPED reason=human_answer_in_progress")
             return
-        if not explicit and self._waiting_for_human(issue):
+        if not explicit and not proactive and self._waiting_for_human(issue):
             logger.info("CONVERSATION_ASSISTANT_SKIPPED reason=waiting_for_human_answer")
             return
-        if not explicit and self._cooldown_active(conversation_id):
+        bypass_cooldown = self._can_bypass_cooldown(conversation_id, decision)
+        if not explicit and not bypass_cooldown and self._cooldown_active(conversation_id):
             logger.info("CONVERSATION_ASSISTANT_SKIPPED reason=cooldown")
             return
 
         reply = decision.reply_text
+        if proactive:
+            logger.info(
+                "PROACTIVE_HELP_DECISION intervene=true level=%d needs_web_search=%s",
+                decision.help_level.value,
+                decision.web_search_required,
+            )
         if decision.web_search_required:
             research = self.ai.research(text, self.db.conversation_context(conversation_id))
             if research is None:
@@ -96,7 +117,7 @@ class ConversationAssistant:
         if reply:
             if self.line.push(conversation_id, reply):
                 self.db.mark_conversation_issue_notified(int(issue["id"]))
-                logger.info("CONVERSATION_ASSISTANT_REPLY_SENT")
+                logger.info("PROACTIVE_HELP_REPLY_SENT" if proactive else "CONVERSATION_ASSISTANT_REPLY_SENT")
             else:
                 logger.warning("CONVERSATION_ASSISTANT_SKIPPED reason=line_push_failed")
 
@@ -125,6 +146,18 @@ class ConversationAssistant:
             return False
         elapsed = datetime.now(timezone.utc) - datetime.fromisoformat(last)
         return elapsed.total_seconds() < self.cooldown_minutes * 60
+
+    def _proactive_helpful(self, decision) -> bool:
+        return decision.expected_helpfulness >= self.proactive_threshold and decision.intrusiveness_risk <= 0.55
+
+    def _can_bypass_cooldown(self, group_id: str, decision) -> bool:
+        last_topic = self.db.last_conversation_assistant_topic(group_id)
+        return (
+            decision.help_type == HelpType.SAFETY
+            or decision.help_level == HelpLevel.ACTIVE_SUPPORT
+            or (decision.expected_helpfulness >= 0.9 and decision.intrusiveness_risk <= 0.25)
+            or (bool(last_topic) and bool(decision.topic) and decision.topic != last_topic)
+        )
 
     def handle_safely(self, event: dict) -> None:
         try:

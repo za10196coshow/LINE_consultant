@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     unanswered_question_delay_seconds: int = 30
     unanswered_question_delay_messages: int = 1
     conversation_assistant_confidence_threshold: float = 0.78
+    conversation_proactive_threshold: float = 0.65
     database_path: str = "data/kanji.db"
     ai_kanji_name: str = "幹事"
     log_level: str = "INFO"

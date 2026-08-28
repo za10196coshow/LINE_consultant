@@ -49,3 +49,15 @@ def test_no_action_records_context_without_calling_either_ai_service():
     assert organizer.events == []
     assert assistant.events == []
     assert db.conversation_context("G1")["recent_messages"][0]["message_text"] == "ありがとう"
+
+
+def test_food_venue_overlap_still_selects_only_organizer():
+    db = Database(":memory:")
+    organizer = FakeHandler()
+    assistant = FakeHandler()
+    coordinator = ResponseCoordinator(db, FakeLine(), organizer, assistant)
+
+    coordinator.handle(event("m3", "腹減ったから店探そう"))
+
+    assert len(organizer.events) == 1
+    assert assistant.events == []

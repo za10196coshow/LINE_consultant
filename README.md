@@ -91,6 +91,7 @@ pytest -q
 | `UNANSWERED_QUESTION_DELAY_SECONDS` | 任意 | `30`。人間の回答を待つ時間の目安 |
 | `UNANSWERED_QUESTION_DELAY_MESSAGES` | 任意 | `1`。未回答とみなすまでの後続メッセージ数 |
 | `CONVERSATION_ASSISTANT_CONFIDENCE_THRESHOLD` | 任意 | `0.78`。自発介入に必要な信頼度 |
+| `CONVERSATION_PROACTIVE_THRESHOLD` | 任意 | `0.65`。潜在ニーズへの先回り支援に必要な信頼度・期待有用性 |
 | `DATABASE_PATH` | 任意 | `data/kanji.db` |
 | `AI_KANJI_NAME` | 任意 | `幹事` |
 | `LOG_LEVEL` | 任意 | `INFO` |
@@ -138,9 +139,11 @@ Renderのサービス実行ファイルシステムは一時的です。再デ�
 
 既存のAI幹事は飲み会、イベント、日程、参加可否、店舗検索を担当します。別モジュールのConversation Assistantはイベントの有無に依存せず、旅行、学校、仕事、ゲーム、端末設定、日常相談などグループ全体の会話を対象にします。`ResponseCoordinator`が1メッセージを `ORGANIZER / CONVERSATION_ASSISTANT / NO_ACTION` のどれか一つへ送り、二重返信を防ぎます。
 
+Conversation Assistantは明示的な質問だけでなく、空腹、天気、遅刻、交通、充電、行動候補、道迷い、安全上の心配などの潜在ニーズも分析します。期待有用性が高く、割り込みの迷惑が小さいと判断した場合だけ短く先回りして助けます。天気・交通・営業時間など最新性が必要な内容はWeb Searchで確認し、検索結果は共通キャラクターの自然な返信へ整形します。単なる「眠い」「暑い」などの雑談や相づちは軽量フィルタで原則無視します。
+
 「ありがとう」「了解」「笑」などはコードの軽量フィルタでOpenAIへ送らず記録だけ行います。日程・参加・店舗検索はOrganizerへ、質問、困りごと、認識のズレ、最新情報の依頼はConversation Assistantへ送ります。曖昧な雑談は原則黙り、未解決issueがある間だけ後続発言を分析して、人間が回答したか、まだ未解決かを確認します。
 
-Conversation AssistantはStructured Outputで `NO_ACTION / ANSWER_QUESTION / CLARIFY_CONFLICT / SUMMARIZE_STATE / RESOLVE_ISSUE / REQUEST_MISSING_INFO / UNANSWERED_QUESTION / WEB_RESEARCH / FACT_CHECK` を判定します。信頼度、回答中の人間、同一issueへの過去介入、解決済み状態、グループ単位のcooldownを確認し、会話が明確に前進するときだけPushします。Bot名・「AI」「教えて」「調べて」などの明示呼びかけはcooldownと通常の待機を省略できます。
+Conversation AssistantはStructured Outputで `NO_ACTION / ANSWER_QUESTION / CLARIFY_CONFLICT / SUMMARIZE_STATE / RESOLVE_ISSUE / REQUEST_MISSING_INFO / UNANSWERED_QUESTION / WEB_RESEARCH / FACT_CHECK / POTENTIAL_NEED / PROACTIVE_HELP` を判定します。信頼度、期待有用性、割り込みリスク、回答中の人間、同一issueへの過去介入、解決済み状態、グループ単位のcooldownを確認してPushします。Bot名などの明示呼びかけに加え、別トピック、高重要度、安全上の問題はcooldown中でも介入できます。
 
 未解決事項は `conversation_issues` にtopic、種類、要約、状態、信頼度、作成・更新・解決・通知時刻とともに保存します。状態は `OPEN / RESOLVED / OBSOLETE` です。同じfingerprintのissueは重複通知せず、解決済みissueを後続メッセージごとに再生成しません。
 

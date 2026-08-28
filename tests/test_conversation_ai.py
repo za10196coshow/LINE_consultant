@@ -1,6 +1,8 @@
-from app.ai.budget import ApiBudget
+import pytest
+
+from app.ai.budget import ApiBudget, ApiBudgetExceeded
 from app.ai.conversation import ConversationAIClient
-from app.models import ConversationResearch, ResearchSource
+from app.models import ConversationAction, ConversationDecision, ConversationResearch, HelpLevel, HelpType, ResearchSource
 from app.prompts.system import BOT_PERSONA, CONVERSATION_ASSISTANT_PROMPT, CONVERSATION_RESEARCH_REPLY_PROMPT
 from app.repositories.database import Database
 
@@ -93,3 +95,33 @@ def test_url_only_or_changed_url_reply_uses_safe_character_fallback():
 def test_conversation_prompts_share_the_common_persona():
     assert CONVERSATION_ASSISTANT_PROMPT.startswith(BOT_PERSONA)
     assert CONVERSATION_RESEARCH_REPLY_PROMPT.startswith(BOT_PERSONA)
+
+
+def test_proactive_decision_schema_keeps_helpfulness_and_search_intent():
+    decision = ConversationDecision(
+        action=ConversationAction.PROACTIVE_HELP,
+        reply_required=True,
+        confidence=0.74,
+        expected_helpfulness=0.91,
+        intrusiveness_risk=0.18,
+        help_type=HelpType.WEATHER,
+        help_level=HelpLevel.WEB_RESEARCH,
+    )
+
+    assert decision.expected_helpfulness == 0.91
+    assert decision.intrusiveness_risk == 0.18
+    assert decision.web_search_required is True
+
+
+def test_budget_limit_blocks_proactive_analysis_before_openai_call():
+    db = Database(":memory:")
+    budget = ApiBudget(db, 100, 90, 150)
+    db.add_api_usage(budget.date_jst, model="gpt-5-mini", cost_jpy=90)
+    ai = ConversationAIClient("test", "gpt-5-mini", "幹事", "Asia/Tokyo", budget)
+    responses = RecordingResponses(parsed=None)
+    ai.client = FakeOpenAI(responses)
+
+    with pytest.raises(ApiBudgetExceeded):
+        ai.analyze("明日の天気なんだろ", "U1", {"recent_messages": []})
+
+    assert responses.calls == []

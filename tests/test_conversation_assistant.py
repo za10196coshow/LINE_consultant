@@ -1,5 +1,5 @@
 from app.ai.budget import ApiBudget, ApiBudgetExceeded
-from app.models import ConversationAction, ConversationDecision, ConversationResearch, ResearchSource
+from app.models import ConversationAction, ConversationDecision, ConversationResearch, HelpLevel, HelpType, ResearchSource
 from app.repositories.database import Database
 from app.services.conversation_assistant import ConversationAssistant
 
@@ -57,6 +57,34 @@ def issue_decision(summary="PDFへの変換方法が未解決", reply="共有メ
         topic="iPhone",
         issue_type="UNANSWERED_QUESTION",
         summary=summary,
+    )
+
+
+def proactive_decision(
+    help_type,
+    summary,
+    reply,
+    *,
+    web=False,
+    confidence=0.76,
+    helpfulness=0.9,
+    risk=0.2,
+    level=HelpLevel.ADVICE,
+):
+    return ConversationDecision(
+        action=ConversationAction.PROACTIVE_HELP,
+        reply_required=True,
+        confidence=confidence,
+        expected_helpfulness=helpfulness,
+        intrusiveness_risk=risk,
+        help_type=help_type,
+        help_level=level,
+        reason=summary,
+        reply_text=reply,
+        topic=help_type.value,
+        issue_type="POTENTIAL_NEED",
+        summary=summary,
+        web_search_required=web,
     )
 
 
@@ -194,3 +222,113 @@ def test_budget_limit_uses_fixed_message_once():
     service.handle_safely(event("m2", "AI、もう一回教えて"))
 
     assert line.pushes == [("G1", "今日はAI幹事ちょっと働きすぎたので、続きは明日で🙏")]
+
+
+def test_food_need_with_known_location_uses_context_and_character_research_reply():
+    decision = proactive_decision(
+        HelpType.FOOD,
+        "横浜駅周辺で食事が必要",
+        None,
+        web=True,
+        level=HelpLevel.WEB_RESEARCH,
+    )
+    service, db, ai, line = make_service([decision])
+    db.ensure_group("G1", "group")
+    db.add_message("G1", None, "U2", "U2", "横浜駅に着いた", "prior", 1)
+    ai.research_result = ConversationResearch(answer_summary="近くに飲食店あり", sources=[])
+    ai.rendered = "腹減ったなら、駅近くでサクッと食べられるところ見つけたよ。"
+
+    service.handle(event("food1", "お腹すいたなー"))
+
+    assert ai.calls[0][2]["recent_messages"][0]["message_text"] == "横浜駅に着いた"
+    assert ai.research_result is not None
+    assert line.pushes[0][1].startswith("腹減ったなら")
+
+
+def test_food_need_without_location_can_offer_light_help_without_search():
+    decision = proactive_decision(HelpType.FOOD, "食事を探したそう", "近くでなんか探す？ 今いる場所分かればすぐ見れるよ。")
+    service, _, ai, line = make_service([decision])
+
+    service.handle(event("food2", "お腹すいたなー"))
+
+    assert ai.research_result is None
+    assert "今いる場所" in line.pushes[0][1]
+
+
+def test_implicit_weather_need_searches_and_adds_action_advice():
+    decision = proactive_decision(
+        HelpType.WEATHER,
+        "明日の天気を気にしている",
+        None,
+        web=True,
+        level=HelpLevel.WEB_RESEARCH,
+    )
+    service, _, ai, line = make_service([decision])
+    ai.research_result = ConversationResearch(answer_summary="午後から雨", sources=[])
+    ai.rendered = "明日は午後から雨っぽい。折りたたみ持っといた方がよさそう☔"
+
+    service.handle(event("weather1", "明日の天気なんだろ"))
+
+    assert "折りたたみ" in line.pushes[0][1]
+
+
+def test_delay_and_battery_needs_get_practical_advice():
+    delay = proactive_decision(HelpType.DELAY, "集合に遅れそう", "先に10分くらい遅れそうって入れとくのがよさそう。")
+    battery = proactive_decision(HelpType.BATTERY, "充電が少ない", "低電力モード入れて、画面暗めにしとくと少し持つよ。")
+    service, _, _, line = make_service([delay, battery], cooldown=0)
+
+    service.handle(event("delay1", "遅刻しそう"))
+    service.handle(event("battery1", "スマホの充電やばい", "U2"))
+
+    assert "先に" in line.pushes[0][1]
+    assert "低電力モード" in line.pushes[1][1]
+
+
+def test_low_helpfulness_proactive_need_stays_silent_and_does_not_open_issue():
+    decision = proactive_decision(HelpType.ACTIVITY, "ただ眠い", "休んだ方がいいよ", helpfulness=0.4)
+    service, db, _, line = make_service([decision])
+
+    service.handle(event("sleep1", "眠い"))
+
+    assert line.pushes == []
+    assert db.open_conversation_issues("G1") == []
+
+
+def test_safety_need_bypasses_cooldown():
+    first = proactive_decision(HelpType.FOOD, "食事が必要", "近くで探す？")
+    safety = proactive_decision(
+        HelpType.SAFETY,
+        "眠い状態で運転予定",
+        "その状態で運転は危ない。いったん安全な場所で休んで、運転を代われるなら代わってもらおう。",
+        helpfulness=0.99,
+        risk=0.05,
+        level=HelpLevel.ACTIVE_SUPPORT,
+    )
+    service, _, _, line = make_service([first, safety])
+
+    service.handle(event("food3", "腹減った"))
+    service.handle(event("safety1", "眠いけどこれから運転", "U2"))
+
+    assert len(line.pushes) == 2
+    assert "運転は危ない" in line.pushes[1][1]
+
+
+def test_same_proactive_food_issue_is_not_repeated():
+    decision = proactive_decision(HelpType.FOOD, "横浜駅で食事が必要", "駅近くで探す？")
+    service, _, _, line = make_service([decision, decision], cooldown=0)
+
+    service.handle(event("food4", "腹減った"))
+    service.handle(event("food5", "俺も腹減った", "U2"))
+
+    assert len(line.pushes) == 1
+
+
+def test_different_topic_can_bypass_cooldown():
+    food = proactive_decision(HelpType.FOOD, "食事が必要", "近くで探す？", helpfulness=0.75, risk=0.3)
+    battery = proactive_decision(HelpType.BATTERY, "充電が少ない", "低電力モード入れとくといいよ。", helpfulness=0.75, risk=0.3)
+    service, _, _, line = make_service([food, battery])
+
+    service.handle(event("food6", "腹減った"))
+    service.handle(event("battery2", "充電やばい", "U2"))
+
+    assert len(line.pushes) == 2

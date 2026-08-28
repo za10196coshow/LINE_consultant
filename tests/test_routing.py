@@ -15,6 +15,12 @@ from app.services.routing import MessageRouter
         ("11時じゃない？", MessageRoute.CONVERSATION_ASSISTANT),
         ("ありがとう", MessageRoute.NO_ACTION),
         ("今日めっちゃ眠い", MessageRoute.NO_ACTION),
+        ("お腹すいたなー", MessageRoute.CONVERSATION_ASSISTANT),
+        ("明日の天気なんだろ", MessageRoute.CONVERSATION_ASSISTANT),
+        ("遅刻しそう", MessageRoute.CONVERSATION_ASSISTANT),
+        ("スマホの充電やばい", MessageRoute.CONVERSATION_ASSISTANT),
+        ("眠いけどこれから運転", MessageRoute.CONVERSATION_ASSISTANT),
+        ("笑", MessageRoute.NO_ACTION),
     ],
 )
 def test_message_routing(message, expected):

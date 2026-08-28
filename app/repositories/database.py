@@ -304,6 +304,15 @@ class Database:
             row = conn.execute("SELECT max(last_notified_at) AS notified FROM conversation_issues WHERE group_id=?", (group_id,)).fetchone()
             return row["notified"] if row else None
 
+    def last_conversation_assistant_topic(self, group_id: str) -> str | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT topic FROM conversation_issues WHERE group_id=? AND last_notified_at IS NOT NULL "
+                "ORDER BY last_notified_at DESC LIMIT 1",
+                (group_id,),
+            ).fetchone()
+            return row["topic"] if row else None
+
     def daily_api_usage(self, date_jst: str) -> dict:
         with self.connect() as conn:
             row = conn.execute("SELECT * FROM daily_api_usage WHERE date_jst=?", (date_jst,)).fetchone()

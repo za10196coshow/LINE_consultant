@@ -34,3 +34,4 @@ def test_render_has_conversation_assistant_defaults():
     assert env["UNANSWERED_QUESTION_DELAY_SECONDS"] == "30"
     assert env["UNANSWERED_QUESTION_DELAY_MESSAGES"] == "1"
     assert env["CONVERSATION_ASSISTANT_CONFIDENCE_THRESHOLD"] == "0.78"
+    assert env["CONVERSATION_PROACTIVE_THRESHOLD"] == "0.65"
