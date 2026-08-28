@@ -9,7 +9,8 @@ from openai import APITimeoutError
 
 from app.ai.budget import ApiBudget, ApiBudgetExceeded, UsageAmounts, estimate_cost_usd
 from app.ai.client import AIClient
-from app.models import VenueCandidate, VenueSearchCriteria
+from app.ai.conversation import ConversationAIClient
+from app.models import ConversationResearch, VenueCandidate, VenueSearchCriteria
 from app.repositories.database import Database
 from app.services.kanji import KanjiService
 
@@ -140,6 +141,24 @@ def test_limit_blocks_search_reply_generation_without_openai_call():
     with pytest.raises(ApiBudgetExceeded):
         ai.render_venue_reply(VenueSearchCriteria(location="横浜"), candidates, "店探して")
     assert ai.client.responses.calls == 0
+
+
+def test_limit_blocks_all_conversation_assistant_openai_paths():
+    db = Database(":memory:")
+    budget = ApiBudget(db, 100, 90, 150)
+    db.add_api_usage(budget.date_jst, model="gpt-5-mini", cost_jpy=90)
+    ai = ConversationAIClient("test", "gpt-5-mini", "幹事", "Asia/Tokyo", budget)
+    ai.client = NeverOpenAI()
+    ai.search_client = NeverOpenAI()
+
+    with pytest.raises(ApiBudgetExceeded):
+        ai.analyze("これ何？", "A", {})
+    with pytest.raises(ApiBudgetExceeded):
+        ai.research("明日の天気は？", {})
+    with pytest.raises(ApiBudgetExceeded):
+        ai.render_research_reply("明日の天気は？", ConversationResearch(answer_summary="雨"))
+    assert ai.client.responses.calls == 0
+    assert ai.search_client.responses.calls == 0
 
 
 def timeout_error():

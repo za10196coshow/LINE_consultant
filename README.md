@@ -12,6 +12,7 @@ LINEグループの会話から、企画、日程、参加可否、場所、予�
 - 直近10件＋構造化状態だけをAIへ渡す省コスト設計
 - 必要時だけWeb Searchを使う実在候補検索
 - JST日次API予算（100円、90円で新規OpenAI呼び出し停止）
+- 飲み会幹事とは独立した、静かなグループ会話アシスタント
 - SQLite、FastAPI、pytest、Render Blueprint対応
 
 ## 構成
@@ -86,6 +87,10 @@ pytest -q
 | `DAILY_API_BUDGET_JPY` | 任意 | `100`。管理上の日次API予算（円） |
 | `DAILY_API_STOP_THRESHOLD_JPY` | 任意 | `90`。この推定日次額以上では新しいOpenAI呼び出しを禁止 |
 | `USD_JPY_RATE` | 任意 | `150`。推定料金の固定USD/JPY換算レート |
+| `CONVERSATION_ASSISTANT_COOLDOWN_MINUTES` | 任意 | `20`。一般会話への自発介入間隔 |
+| `UNANSWERED_QUESTION_DELAY_SECONDS` | 任意 | `30`。人間の回答を待つ時間の目安 |
+| `UNANSWERED_QUESTION_DELAY_MESSAGES` | 任意 | `1`。未回答とみなすまでの後続メッセージ数 |
+| `CONVERSATION_ASSISTANT_CONFIDENCE_THRESHOLD` | 任意 | `0.78`。自発介入に必要な信頼度 |
 | `DATABASE_PATH` | 任意 | `data/kanji.db` |
 | `AI_KANJI_NAME` | 任意 | `幹事` |
 | `LOG_LEVEL` | 任意 | `INFO` |
@@ -128,6 +133,20 @@ Pythonは `.python-version`、`render.yaml` の `PYTHON_VERSION`、`pyproject.to
 Renderのサービス実行ファイルシステムは一時的です。再デプロイ、再起動、インスタンス交換などでSQLiteデータが消える可能性があります。また複数インスタンスから単一SQLiteを安全に共有できません。第一版の試用には使えますが、データを残す本運用ではRender Persistent Disk（対応プランで `DATABASE_PATH` をマウント先へ変更）またはPostgreSQLへ移行してください。DBアクセスをrepositoryへ分離しているため移行範囲を限定できます。
 
 この制約は日次API予算データにも適用されます。現在の無料プランと `/opt/render/project/src/data/kanji.db` の組み合わせでは、再デプロイ後も90円停止状態を保持できる保証がありません。費用上限を安全装置として本番利用するには、Render Persistent Diskを `/var/data` 等へマウントして `DATABASE_PATH=/var/data/kanji.db` に変更するか、PostgreSQLへ移行してください。永続ストレージなしではOpenAI Platform側のProject Budget/Usage Limitも併用してください。
+
+## グループ会話アシスタント
+
+既存のAI幹事は飲み会、イベント、日程、参加可否、店舗検索を担当します。別モジュールのConversation Assistantはイベントの有無に依存せず、旅行、学校、仕事、ゲーム、端末設定、日常相談などグループ全体の会話を対象にします。`ResponseCoordinator`が1メッセージを `ORGANIZER / CONVERSATION_ASSISTANT / NO_ACTION` のどれか一つへ送り、二重返信を防ぎます。
+
+「ありがとう」「了解」「笑」などはコードの軽量フィルタでOpenAIへ送らず記録だけ行います。日程・参加・店舗検索はOrganizerへ、質問、困りごと、認識のズレ、最新情報の依頼はConversation Assistantへ送ります。曖昧な雑談は原則黙り、未解決issueがある間だけ後続発言を分析して、人間が回答したか、まだ未解決かを確認します。
+
+Conversation AssistantはStructured Outputで `NO_ACTION / ANSWER_QUESTION / CLARIFY_CONFLICT / SUMMARIZE_STATE / RESOLVE_ISSUE / REQUEST_MISSING_INFO / UNANSWERED_QUESTION / WEB_RESEARCH / FACT_CHECK` を判定します。信頼度、回答中の人間、同一issueへの過去介入、解決済み状態、グループ単位のcooldownを確認し、会話が明確に前進するときだけPushします。Bot名・「AI」「教えて」「調べて」などの明示呼びかけはcooldownと通常の待機を省略できます。
+
+未解決事項は `conversation_issues` にtopic、種類、要約、状態、信頼度、作成・更新・解決・通知時刻とともに保存します。状態は `OPEN / RESOLVED / OBSOLETE` です。同じfingerprintのissueは重複通知せず、解決済みissueを後続メッセージごとに再生成しません。
+
+一般会話のWeb Searchも、調査結果を一度 `ConversationResearch`へ構造化し、検索sourceと一致するURLだけを残してから、共通の`BOT_PERSONA`でLINE返信を生成します。検索結果、JSON、URLだけを直接LINEへ流しません。これらの分析、検索、最終返信、retryもすべて日次Budget Guard対象です。
+
+未解決質問の待機は外部Queueを追加しない第一版として、次のLINEイベント到着時に経過秒数または後続メッセージ数を評価します。質問だけが投稿され、その後メッセージが一切ない状態で指定秒後に自動発言するタイマーではありません。厳密な時間差発言が必要なら、永続ジョブQueueが必要です。
 
 ## トラブルシューティング
 

@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.ai.budget import ApiBudget
-from app.main import app, service
+from app.main import app, conversation_assistant, coordinator, service
 from app.repositories.database import Database
 
 
@@ -22,6 +22,9 @@ def fresh_db(monkeypatch):
     database = Database(":memory:")
     monkeypatch.setattr(service, "db", database)
     monkeypatch.setattr(service.ai, "budget", ApiBudget(database, 100, 90, 150))
+    monkeypatch.setattr(coordinator, "db", database)
+    monkeypatch.setattr(conversation_assistant, "db", database)
+    monkeypatch.setattr(conversation_assistant.ai, "budget", service.ai.budget)
     return database
 
 

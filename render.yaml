@@ -23,6 +23,14 @@ services:
         value: 90
       - key: USD_JPY_RATE
         value: 150
+      - key: CONVERSATION_ASSISTANT_COOLDOWN_MINUTES
+        value: 20
+      - key: UNANSWERED_QUESTION_DELAY_SECONDS
+        value: 30
+      - key: UNANSWERED_QUESTION_DELAY_MESSAGES
+        value: 1
+      - key: CONVERSATION_ASSISTANT_CONFIDENCE_THRESHOLD
+        value: 0.78
       - key: DATABASE_PATH
         value: /opt/render/project/src/data/kanji.db
       - key: LINE_CHANNEL_SECRET

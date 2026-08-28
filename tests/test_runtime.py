@@ -25,3 +25,12 @@ def test_render_has_daily_api_budget_defaults():
     assert env["DAILY_API_BUDGET_JPY"] == "100"
     assert env["DAILY_API_STOP_THRESHOLD_JPY"] == "90"
     assert env["USD_JPY_RATE"] == "150"
+
+
+def test_render_has_conversation_assistant_defaults():
+    render = yaml.safe_load((ROOT / "render.yaml").read_text(encoding="utf-8"))
+    env = {item["key"]: str(item.get("value", "")) for item in render["services"][0]["envVars"]}
+    assert env["CONVERSATION_ASSISTANT_COOLDOWN_MINUTES"] == "20"
+    assert env["UNANSWERED_QUESTION_DELAY_SECONDS"] == "30"
+    assert env["UNANSWERED_QUESTION_DELAY_MESSAGES"] == "1"
+    assert env["CONVERSATION_ASSISTANT_CONFIDENCE_THRESHOLD"] == "0.78"

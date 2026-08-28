@@ -9,9 +9,12 @@ from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 
 from app.ai.budget import ApiBudget
 from app.ai.client import AIClient
+from app.ai.conversation import ConversationAIClient
 from app.config import get_settings
 from app.line.client import LineClient
 from app.repositories.database import Database
+from app.services.conversation_assistant import ConversationAssistant
+from app.services.coordinator import ResponseCoordinator
 from app.services.kanji import KanjiService
 
 settings = get_settings()
@@ -42,6 +45,26 @@ service = KanjiService(
     ),
     LineClient(settings.line_channel_access_token),
 )
+conversation_ai = ConversationAIClient(
+    settings.openai_api_key,
+    settings.openai_model,
+    settings.ai_kanji_name,
+    settings.timezone,
+    api_budget,
+    settings.openai_timeout_seconds,
+    settings.openai_search_timeout_seconds,
+)
+conversation_assistant = ConversationAssistant(
+    db,
+    conversation_ai,
+    service.line,
+    settings.ai_kanji_name,
+    settings.conversation_assistant_cooldown_minutes,
+    settings.unanswered_question_delay_seconds,
+    settings.unanswered_question_delay_messages,
+    settings.conversation_assistant_confidence_threshold,
+)
+coordinator = ResponseCoordinator(db, service.line, service, conversation_assistant)
 app = FastAPI(title="LINE AI Kanji")
 
 
@@ -72,5 +95,5 @@ async def webhook(request: Request, background_tasks: BackgroundTasks, x_line_si
     except (UnicodeDecodeError, json.JSONDecodeError):
         raise HTTPException(status_code=400, detail="Invalid JSON")
     for event in payload.get("events", []):
-        background_tasks.add_task(service.handle_safely, event)
+        background_tasks.add_task(coordinator.handle_safely, event)
     return {"ok": True}

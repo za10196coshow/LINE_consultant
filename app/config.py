@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     daily_api_budget_jpy: float = 100.0
     daily_api_stop_threshold_jpy: float = 90.0
     usd_jpy_rate: float = 150.0
+    conversation_assistant_cooldown_minutes: int = 20
+    unanswered_question_delay_seconds: int = 30
+    unanswered_question_delay_messages: int = 1
+    conversation_assistant_confidence_threshold: float = 0.78
     database_path: str = "data/kanji.db"
     ai_kanji_name: str = "幹事"
     log_level: str = "INFO"

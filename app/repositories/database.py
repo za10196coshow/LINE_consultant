@@ -60,6 +60,23 @@ CREATE TABLE IF NOT EXISTS api_budget_notifications (
  notified_at TEXT NOT NULL,
  PRIMARY KEY(date_jst, group_id)
 );
+CREATE TABLE IF NOT EXISTS conversation_issues (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ group_id TEXT NOT NULL REFERENCES groups(id),
+ fingerprint TEXT NOT NULL,
+ topic TEXT NOT NULL,
+ issue_type TEXT NOT NULL,
+ summary TEXT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('OPEN','RESOLVED','OBSOLETE')),
+ confidence REAL NOT NULL,
+ source_message_id TEXT,
+ created_at TEXT NOT NULL,
+ last_updated_at TEXT NOT NULL,
+ resolved_at TEXT,
+ last_notified_at TEXT,
+ UNIQUE(group_id, fingerprint)
+);
+CREATE INDEX IF NOT EXISTS idx_conversation_issues_open ON conversation_issues(group_id,status,last_updated_at DESC);
 """
 
 
@@ -200,6 +217,92 @@ class Database:
             "preferences": dict(preferences) if preferences else {},
             "recent_messages": recent,
         }
+
+    def conversation_context(self, group_id: str, message_limit: int = 12) -> dict:
+        with self.connect() as conn:
+            recent = [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT id,display_name,message_text,timestamp,created_at FROM conversation_messages "
+                    "WHERE group_id=? ORDER BY id DESC LIMIT ?",
+                    (group_id, message_limit),
+                )
+            ][::-1]
+        return {"recent_messages": recent, "open_issues": self.open_conversation_issues(group_id)}
+
+    def has_open_conversation_issues(self, group_id: str) -> bool:
+        with self.connect() as conn:
+            return (
+                conn.execute("SELECT 1 FROM conversation_issues WHERE group_id=? AND status='OPEN' LIMIT 1", (group_id,)).fetchone()
+                is not None
+            )
+
+    def open_conversation_issues(self, group_id: str) -> list[dict]:
+        with self.connect() as conn:
+            return [
+                dict(row)
+                for row in conn.execute(
+                    "SELECT * FROM conversation_issues WHERE group_id=? AND status='OPEN' ORDER BY last_updated_at DESC LIMIT 10",
+                    (group_id,),
+                )
+            ]
+
+    def upsert_conversation_issue(
+        self,
+        group_id: str,
+        fingerprint: str,
+        topic: str,
+        issue_type: str,
+        summary: str,
+        confidence: float,
+        source_message_id: str,
+    ) -> dict:
+        stamp = now_iso()
+        with self.connect() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO conversation_issues(group_id,fingerprint,topic,issue_type,summary,status,confidence,"
+                "source_message_id,created_at,last_updated_at) VALUES(?,?,?,?,?,'OPEN',?,?,?,?)",
+                (group_id, fingerprint, topic, issue_type, summary, confidence, source_message_id, stamp, stamp),
+            )
+            conn.execute(
+                "UPDATE conversation_issues SET confidence=max(confidence,?),last_updated_at=? "
+                "WHERE group_id=? AND fingerprint=? AND status='OPEN'",
+                (confidence, stamp, group_id, fingerprint),
+            )
+            return dict(
+                conn.execute("SELECT * FROM conversation_issues WHERE group_id=? AND fingerprint=?", (group_id, fingerprint)).fetchone()
+            )
+
+    def resolve_conversation_issue(self, issue_id: int) -> None:
+        stamp = now_iso()
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE conversation_issues SET status='RESOLVED',resolved_at=?,last_updated_at=? WHERE id=? AND status='OPEN'",
+                (stamp, stamp, issue_id),
+            )
+
+    def mark_conversation_issue_notified(self, issue_id: int) -> None:
+        stamp = now_iso()
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE conversation_issues SET last_notified_at=?,last_updated_at=? WHERE id=?",
+                (stamp, stamp, issue_id),
+            )
+
+    def conversation_messages_since_issue(self, issue_id: int) -> int:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT count(*) AS count FROM conversation_messages m JOIN conversation_issues i ON i.id=? "
+                "WHERE m.group_id=i.group_id AND m.id>(SELECT coalesce(max(source.id),0) FROM conversation_messages source "
+                "WHERE source.group_id=i.group_id AND source.line_message_id=i.source_message_id)",
+                (issue_id,),
+            ).fetchone()
+            return int(row["count"])
+
+    def last_conversation_assistant_notification(self, group_id: str) -> str | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT max(last_notified_at) AS notified FROM conversation_issues WHERE group_id=?", (group_id,)).fetchone()
+            return row["notified"] if row else None
 
     def daily_api_usage(self, date_jst: str) -> dict:
         with self.connect() as conn:
