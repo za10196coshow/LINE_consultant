@@ -13,6 +13,10 @@ services:
         value: Asia/Tokyo
       - key: OPENAI_MODEL
         value: gpt-5-mini
+      - key: OPENAI_TIMEOUT_SECONDS
+        value: 45
+      - key: OPENAI_SEARCH_TIMEOUT_SECONDS
+        value: 75
       - key: DATABASE_PATH
         value: /opt/render/project/src/data/kanji.db
       - key: LINE_CHANNEL_SECRET
@@ -21,4 +25,3 @@ services:
         sync: false
       - key: OPENAI_API_KEY
         sync: false
-

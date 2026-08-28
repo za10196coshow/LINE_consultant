@@ -6,7 +6,6 @@ from typing import Iterator
 
 from app.models import Decision
 
-
 SCHEMA = """
 PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS groups (
@@ -131,9 +130,11 @@ class Database:
                     conn.execute(f"UPDATE event_preferences SET {key}=? WHERE event_id=?", (value, event_id))
             fields, params = [], []
             if decision.event_status:
-                fields.append("status=?"); params.append(decision.event_status.value)
+                fields.append("status=?")
+                params.append(decision.event_status.value)
             if decision.event_summary:
-                fields.append("summary=?"); params.append(decision.event_summary)
+                fields.append("summary=?")
+                params.append(decision.event_summary)
             if fields:
                 params.extend([now_iso(), event_id])
                 conn.execute(f"UPDATE events SET {','.join(fields)},updated_at=? WHERE id=?", params)
@@ -141,22 +142,42 @@ class Database:
     def add_message(self, group_id: str, event_id: int | None, user_id: str, display_name: str, text: str, message_id: str, timestamp: int):
         with self.connect() as conn:
             conn.execute(
-                "INSERT INTO conversation_messages(group_id,event_id,line_user_id,display_name,message_text,line_message_id,timestamp,created_at) VALUES(?,?,?,?,?,?,?,?)",
+                "INSERT INTO conversation_messages"
+                "(group_id,event_id,line_user_id,display_name,message_text,line_message_id,timestamp,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
                 (group_id, event_id, user_id, display_name, text, message_id, timestamp, now_iso()),
             )
-            conn.execute("DELETE FROM conversation_messages WHERE group_id=? AND id NOT IN (SELECT id FROM conversation_messages WHERE group_id=? ORDER BY id DESC LIMIT 50)", (group_id, group_id))
+            conn.execute(
+                "DELETE FROM conversation_messages WHERE group_id=? AND id NOT IN "
+                "(SELECT id FROM conversation_messages WHERE group_id=? ORDER BY id DESC LIMIT 50)",
+                (group_id, group_id),
+            )
 
     def context(self, group_id: str) -> dict:
         event = self.active_event(group_id)
         if not event:
             return {"event": None, "availability": [], "preferences": {}, "recent_messages": []}
         with self.connect() as conn:
-            availability = [dict(r) for r in conn.execute(
-                "SELECT p.display_name,d.candidate_date,d.availability,d.note FROM date_availability d JOIN participants p ON p.id=d.participant_id WHERE d.event_id=? ORDER BY d.candidate_date,p.display_name", (event["id"],)
-            )]
+            availability = [
+                dict(r)
+                for r in conn.execute(
+                    "SELECT p.display_name,d.candidate_date,d.availability,d.note "
+                    "FROM date_availability d JOIN participants p ON p.id=d.participant_id "
+                    "WHERE d.event_id=? ORDER BY d.candidate_date,p.display_name",
+                    (event["id"],),
+                )
+            ]
             preferences = conn.execute("SELECT * FROM event_preferences WHERE event_id=?", (event["id"],)).fetchone()
-            recent = [dict(r) for r in conn.execute(
-                "SELECT display_name,message_text,timestamp FROM conversation_messages WHERE group_id=? ORDER BY id DESC LIMIT 10", (group_id,)
-            )][::-1]
-        return {"event": dict(event), "availability": availability, "preferences": dict(preferences) if preferences else {}, "recent_messages": recent}
-
+            recent = [
+                dict(r)
+                for r in conn.execute(
+                    "SELECT display_name,message_text,timestamp FROM conversation_messages WHERE group_id=? ORDER BY id DESC LIMIT 10",
+                    (group_id,),
+                )
+            ][::-1]
+        return {
+            "event": dict(event),
+            "availability": availability,
+            "preferences": dict(preferences) if preferences else {},
+            "recent_messages": recent,
+        }

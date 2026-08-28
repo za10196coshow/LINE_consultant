@@ -9,6 +9,7 @@ class Action(str, Enum):
     REPLY = "REPLY"
     ORGANIZE = "ORGANIZE"
     SEARCH = "SEARCH"
+    SEARCH_VENUE = "SEARCH_VENUE"
     PROPOSE = "PROPOSE"
 
 
@@ -59,9 +60,8 @@ class Decision(BaseModel):
 
     @model_validator(mode="after")
     def normalize(self):
-        if self.action in {Action.REPLY, Action.ORGANIZE, Action.PROPOSE, Action.SEARCH}:
+        if self.action in {Action.REPLY, Action.ORGANIZE, Action.PROPOSE, Action.SEARCH, Action.SEARCH_VENUE}:
             self.reply_required = True
         if not self.reply_required:
             self.reply_text = None
         return self
-

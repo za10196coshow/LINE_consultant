@@ -80,10 +80,32 @@ pytest -q
 | `LINE_CHANNEL_ACCESS_TOKEN` | 必須 | LINE Messaging APIのaccess token |
 | `OPENAI_API_KEY` | 必須 | OpenAI PlatformのAPI key |
 | `OPENAI_MODEL` | 任意 | `gpt-5-mini`。利用可能モデルへ変更可能 |
+| `OPENAI_TIMEOUT_SECONDS` | 任意 | `45`。OpenAI 1回あたりの待機上限（秒） |
+| `OPENAI_SEARCH_TIMEOUT_SECONDS` | 任意 | `75`。Web Search 1回あたりの待機上限（秒） |
 | `DATABASE_PATH` | 任意 | `data/kanji.db` |
 | `AI_KANJI_NAME` | 任意 | `幹事` |
 | `LOG_LEVEL` | 任意 | `INFO` |
 | `TIMEZONE` | 任意 | `Asia/Tokyo` |
+
+## Webhookとタイムアウト
+
+LINEのWebhookは署名とJSONを検証した時点で処理を受理し、FastAPIのBackgroundTasksへ渡してすぐにHTTP 200を返します。AI処理の完了後は、有効期限の短いreplyTokenに依存せず、グループ・room・userのIDを宛先としたPush Messageで応答します。外部Queueを使わない第一版のため、プロセス停止や再デプロイの瞬間には受理済みバックグラウンド処理が失われる可能性があります。本格運用では永続Queueへの移行を検討してください。
+
+OpenAIクライアントのタイムアウトは既定45秒です。SDKの自動リトライを無効にし、Timeoutに限ってアプリが1回だけ再試行します。Rate Limit、認証エラー、その他APIエラーは無意味に再試行しません。2回ともTimeoutした場合、質問や集計・検索依頼には短い失敗通知をPushしますが、単なる日程回答では黙ります。
+
+## お店・企画のWeb検索
+
+「店探して」「横浜で焼肉屋探して」「この条件で候補出して」など、実在店舗・施設を探す明示的な発言だけを `SEARCH_VENUE` として扱います。「横浜がいい」「焼肉いいね」「19日行ける」「ありがとう」などの希望・日程・雑談ではWeb Searchを呼びません。
+
+検索時は現在のイベントから、候補日、場所、参加人数、予算、料理ジャンル、雰囲気、開始時刻、その他条件を取り出します。致命的な不足でなければ、ユーザーにすべて言い直してもらわず、そのまま日本向けのOpenAI Responses API built-in Web Searchを実行します。検索は通常会話のStructured Outputとは分離されています。
+
+検索結果では `web_search_call.action.sources` とcitation metadataから、OpenAIが実際に参照したURLを抽出します。LINEへ出すURLはこの一覧と照合し、モデル本文にだけ存在する未確認URLは削除します。空席、現在営業中、予約可能などはリアルタイムに確認できない限り断定しません。
+
+追加のAPIキーは不要で、既存の `OPENAI_API_KEY` を使います。ただし、Web Searchのモデル利用・ツール呼び出しにはOpenAI API利用料金が発生し得ます。検索時だけ呼び出すことで不要なコストを抑えています。
+
+## Pythonバージョン
+
+Pythonは `.python-version`、`render.yaml` の `PYTHON_VERSION`、`pyproject.toml` の `requires-python` の3箇所で `3.12.7` / Python 3.12系に固定しています。起動時にも3.12系以外なら明示的に停止します。既存サービスをBlueprintで作成していない場合は、Render Dashboardの **Environment** で `PYTHON_VERSION=3.12.7` を設定し、**Clear build cache & deploy** を実行してください。デプロイログの `Using Python version 3.12.7` を確認します。
 
 ## SQLiteとRender無料環境の重要な制約
 
@@ -109,4 +131,3 @@ Webhookは受信した生バイト列をHMAC-SHA256で検証してからJSON化�
 - [LINE: Webhook受信と再送](https://developers.line.biz/en/docs/messaging-api/receiving-messages/)
 - [OpenAI: Responses API](https://developers.openai.com/api/reference/resources/responses/methods/create)
 - [OpenAI: Web search](https://developers.openai.com/api/docs/guides/tools-web-search)
-

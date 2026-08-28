@@ -1,6 +1,6 @@
 import logging
 
-from linebot.v3.messaging import ApiClient, Configuration, MessagingApi, ReplyMessageRequest, TextMessage
+from linebot.v3.messaging import ApiClient, Configuration, MessagingApi, PushMessageRequest, ReplyMessageRequest, TextMessage
 
 logger = logging.getLogger(__name__)
 
@@ -21,14 +21,32 @@ class LineClient:
                 if source_type == "room":
                     return api.get_room_member_profile(conversation_id, user_id).display_name
                 return api.get_profile(user_id).display_name
-        except Exception:
-            logger.warning("LINE profile lookup failed for user suffix=%s", user_id[-6:] if user_id else "unknown", exc_info=True)
+        except Exception as exc:
+            logger.warning(
+                "LINE profile lookup failed user_suffix=%s category=%s",
+                user_id[-6:] if user_id else "unknown",
+                type(exc).__name__,
+            )
             return "メンバー"
 
-    def reply(self, reply_token: str, text: str) -> None:
+    def reply(self, reply_token: str, text: str) -> bool:
         try:
             with self._api() as api_client:
-                MessagingApi(api_client).reply_message(ReplyMessageRequest(reply_token=reply_token, messages=[TextMessage(text=text[:5000])]))
-        except Exception:
-            logger.exception("LINE reply failed")
+                MessagingApi(api_client).reply_message(
+                    ReplyMessageRequest(reply_token=reply_token, messages=[TextMessage(text=text[:5000])])
+                )
+            logger.info("LINE reply success")
+            return True
+        except Exception as exc:
+            logger.error("LINE reply failed category=%s", type(exc).__name__)
+            return False
 
+    def push(self, conversation_id: str, text: str) -> bool:
+        try:
+            with self._api() as api_client:
+                MessagingApi(api_client).push_message(PushMessageRequest(to=conversation_id, messages=[TextMessage(text=text[:5000])]))
+            logger.info("LINE push success target_suffix=%s", conversation_id[-6:])
+            return True
+        except Exception as exc:
+            logger.error("LINE push failed target_suffix=%s category=%s", conversation_id[-6:], type(exc).__name__)
+            return False

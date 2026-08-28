@@ -1,5 +1,6 @@
+from app.ai.client import OpenAITimeoutExhausted
 from app.main import service
-from app.models import Action, Availability, Decision, Fact
+from app.models import Action, Availability, Decision, Fact, PreferenceUpdate, VenueSearchResult
 
 
 def test_root(client):
@@ -21,10 +22,17 @@ def test_valid_signature_empty_events(post_webhook):
 
 def test_webhook_remember_only_and_duplicate(post_webhook, event_factory, monkeypatch, fresh_db):
     monkeypatch.setattr(service.line, "display_name", lambda *_: "田中")
-    monkeypatch.setattr(service.line, "reply", lambda *_: (_ for _ in ()).throw(AssertionError("must stay silent")))
-    monkeypatch.setattr(service.ai, "decide", lambda *_: Decision(
-        action=Action.REMEMBER_ONLY, create_event=True, event_title="9月飲み", facts=[Fact(candidate_date="2026-09-19", availability=Availability.yes)]
-    ))
+    monkeypatch.setattr(service.line, "push", lambda *_: (_ for _ in ()).throw(AssertionError("must stay silent")))
+    monkeypatch.setattr(
+        service.ai,
+        "decide",
+        lambda *_: Decision(
+            action=Action.REMEMBER_ONLY,
+            create_event=True,
+            event_title="9月飲み",
+            facts=[Fact(candidate_date="2026-09-19", availability=Availability.yes)],
+        ),
+    )
     body = event_factory(text="19日なら行ける")
     assert post_webhook(body).status_code == 200
     assert post_webhook(body).status_code == 200
@@ -38,7 +46,11 @@ def test_webhook_remember_only_and_duplicate(post_webhook, event_factory, monkey
 
 def test_group_data_isolation(post_webhook, event_factory, monkeypatch, fresh_db):
     monkeypatch.setattr(service.line, "display_name", lambda *_: "参加者")
-    monkeypatch.setattr(service.ai, "decide", lambda *_: Decision(action=Action.REMEMBER_ONLY, create_event=True, facts=[Fact(candidate_date="9/21", availability="maybe")]))
+    monkeypatch.setattr(
+        service.ai,
+        "decide",
+        lambda *_: Decision(action=Action.REMEMBER_ONLY, create_event=True, facts=[Fact(candidate_date="9/21", availability="maybe")]),
+    )
     post_webhook(event_factory(message_id="a", group_id="GA"))
     post_webhook(event_factory(message_id="b", group_id="GB"))
     assert len(fresh_db.context("GA")["availability"]) == 1
@@ -46,19 +58,19 @@ def test_group_data_isolation(post_webhook, event_factory, monkeypatch, fresh_db
     assert fresh_db.context("missing")["event"] is None
 
 
-def test_reply_action(post_webhook, event_factory, monkeypatch):
+def test_reply_action_uses_push_after_background_processing(post_webhook, event_factory, monkeypatch):
     replies = []
     monkeypatch.setattr(service.line, "display_name", lambda *_: "A")
-    monkeypatch.setattr(service.line, "reply", lambda token, text: replies.append((token, text)))
+    monkeypatch.setattr(service.line, "push", lambda target, text: replies.append((target, text)))
     monkeypatch.setattr(service.ai, "decide", lambda *_: Decision(action=Action.REPLY, reply_text="いいね、やろう🍺", create_event=True))
     post_webhook(event_factory())
-    assert replies == [("reply-m1", "いいね、やろう🍺")]
+    assert replies == [("G1", "いいね、やろう🍺")]
 
 
 def test_ignore_action(post_webhook, event_factory, monkeypatch):
     replies = []
     monkeypatch.setattr(service.line, "display_name", lambda *_: "A")
-    monkeypatch.setattr(service.line, "reply", lambda *x: replies.append(x))
+    monkeypatch.setattr(service.line, "push", lambda *x: replies.append(x))
     monkeypatch.setattr(service.ai, "decide", lambda *_: Decision(action=Action.IGNORE))
     assert post_webhook(event_factory()).status_code == 200
     assert replies == []
@@ -67,7 +79,7 @@ def test_ignore_action(post_webhook, event_factory, monkeypatch):
 def test_openai_error_falls_back_to_ignore(post_webhook, event_factory, monkeypatch):
     replies = []
     monkeypatch.setattr(service.line, "display_name", lambda *_: "A")
-    monkeypatch.setattr(service.line, "reply", lambda *x: replies.append(x))
+    monkeypatch.setattr(service.line, "push", lambda *x: replies.append(x))
     monkeypatch.setattr(service.ai, "decide", lambda *_: Decision(action=Action.IGNORE))
     assert post_webhook(event_factory()).status_code == 200
     assert not replies
@@ -76,16 +88,96 @@ def test_openai_error_falls_back_to_ignore(post_webhook, event_factory, monkeypa
 def test_line_error_does_not_fail_webhook(post_webhook, event_factory, monkeypatch):
     monkeypatch.setattr(service.line, "display_name", lambda *_: "A")
     monkeypatch.setattr(service.ai, "decide", lambda *_: Decision(action=Action.REPLY, reply_text="返信", create_event=True))
-    monkeypatch.setattr(service.line, "reply", lambda *_: (_ for _ in ()).throw(RuntimeError("LINE down")))
+    monkeypatch.setattr(service.line, "push", lambda *_: False)
     assert post_webhook(event_factory()).status_code == 200
 
 
 def test_search_action(post_webhook, event_factory, monkeypatch):
     replies = []
     monkeypatch.setattr(service.line, "display_name", lambda *_: "A")
-    monkeypatch.setattr(service.line, "reply", lambda token, text: replies.append(text))
+    monkeypatch.setattr(service.line, "push", lambda target, text: replies.append(text))
     monkeypatch.setattr(service.ai, "decide", lambda *_: Decision(action=Action.SEARCH, search_required=True, create_event=True))
-    monkeypatch.setattr(service.ai, "search", lambda *_: "① 実在候補 https://example.com")
+    monkeypatch.setattr(
+        service.ai,
+        "search",
+        lambda *_: VenueSearchResult(
+            "① 店A https://example.com/a\n② 店B https://example.com/b\n③ 店C https://example.com/c",
+            ("https://example.com/a", "https://example.com/b", "https://example.com/c"),
+            3,
+        ),
+    )
     post_webhook(event_factory(text="実際に行ける場所を探して"))
-    assert "実在候補" in replies[0]
+    assert all(marker in replies[0] for marker in ("①", "②", "③"))
 
+
+def test_timeout_exhausted_returns_200_and_pushes_fallback(post_webhook, event_factory, monkeypatch):
+    pushes = []
+    monkeypatch.setattr(service.line, "display_name", lambda *_: "A")
+    monkeypatch.setattr(service.ai, "decide", lambda *_: (_ for _ in ()).throw(OpenAITimeoutExhausted()))
+    monkeypatch.setattr(service.line, "push", lambda target, text: pushes.append((target, text)))
+
+    response = post_webhook(event_factory(text="今どんな感じ？"))
+
+    assert response.status_code == 200
+    assert pushes == [("G1", "ちょっと考えるのに失敗した。もう一回呼んで🙏")]
+
+
+def test_timeout_on_availability_stays_silent(post_webhook, event_factory, monkeypatch):
+    pushes = []
+    monkeypatch.setattr(service.line, "display_name", lambda *_: "A")
+    monkeypatch.setattr(service.ai, "decide", lambda *_: (_ for _ in ()).throw(OpenAITimeoutExhausted()))
+    monkeypatch.setattr(service.line, "push", lambda *args: pushes.append(args))
+
+    assert post_webhook(event_factory(text="19日なら行ける")).status_code == 200
+    assert pushes == []
+
+
+def test_background_failure_is_contained_and_webhook_returns_200(post_webhook, event_factory, monkeypatch):
+    monkeypatch.setattr(service, "handle", lambda *_: (_ for _ in ()).throw(RuntimeError("unexpected")))
+    assert post_webhook(event_factory()).status_code == 200
+
+
+def test_shop_search_uses_saved_event_preferences(post_webhook, event_factory, monkeypatch, fresh_db):
+    fresh_db.ensure_group("G1", "group")
+    event_id = fresh_db.create_event("G1", "9月飲み")
+    participant_id = fresh_db.ensure_participant(event_id, "U0", "幹事")
+    fresh_db.save_decision(
+        event_id,
+        participant_id,
+        Decision(
+            action=Action.REMEMBER_ONLY,
+            preference_update=PreferenceUpdate(area="横浜", budget_max=5000, number_of_people=5, preferred_food="焼肉"),
+        ),
+    )
+    captured = []
+    monkeypatch.setattr(service.line, "display_name", lambda *_: "A")
+    monkeypatch.setattr(service.ai, "decide", lambda *_: Decision(action=Action.REPLY, reply_text="探すね"))
+    monkeypatch.setattr(
+        service.ai,
+        "search",
+        lambda criteria, request: captured.append((criteria, request))
+        or VenueSearchResult("① 店A\nhttps://venue.example/a", ("https://venue.example/a",), 1),
+    )
+    monkeypatch.setattr(service.line, "push", lambda *_: True)
+
+    assert post_webhook(event_factory(text="店探して")).status_code == 200
+    assert captured[0][0].location == "横浜"
+    assert captured[0][0].budget_max == 5000
+    assert captured[0][0].party_size == 5
+    assert captured[0][0].genre == "焼肉"
+
+
+def test_area_preference_does_not_call_web_search(post_webhook, event_factory, monkeypatch):
+    monkeypatch.setattr(service.line, "display_name", lambda *_: "A")
+    monkeypatch.setattr(
+        service.ai,
+        "decide",
+        lambda *_: Decision(
+            action=Action.REMEMBER_ONLY,
+            create_event=True,
+            preference_update=PreferenceUpdate(area="横浜"),
+        ),
+    )
+    monkeypatch.setattr(service.ai, "search", lambda *_: (_ for _ in ()).throw(AssertionError("must not search")))
+
+    assert post_webhook(event_factory(text="横浜がいい")).status_code == 200

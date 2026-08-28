@@ -39,16 +39,25 @@ def post_webhook(client):
     def post(body):
         raw, signature = signed(body)
         return client.post("/webhook", content=raw, headers={"x-line-signature": signature, "content-type": "application/json"})
+
     return post
 
 
 @pytest.fixture
 def event_factory():
     def make(message_id="m1", group_id="G1", text="9月飲もうぜ", user_id="U1", event_id=None):
-        return {"destination": "bot", "events": [{
-            "type": "message", "webhookEventId": event_id or f"evt-{message_id}", "timestamp": 1788000000000,
-            "replyToken": f"reply-{message_id}", "source": {"type": "group", "groupId": group_id, "userId": user_id},
-            "message": {"id": message_id, "type": "text", "text": text},
-        }]}
-    return make
+        return {
+            "destination": "bot",
+            "events": [
+                {
+                    "type": "message",
+                    "webhookEventId": event_id or f"evt-{message_id}",
+                    "timestamp": 1788000000000,
+                    "replyToken": f"reply-{message_id}",
+                    "source": {"type": "group", "groupId": group_id, "userId": user_id},
+                    "message": {"id": message_id, "type": "text", "text": text},
+                }
+            ],
+        }
 
+    return make

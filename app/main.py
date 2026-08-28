@@ -3,8 +3,9 @@ import hashlib
 import hmac
 import json
 import logging
+import sys
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 
 from app.ai.client import AIClient
 from app.config import get_settings
@@ -13,10 +14,25 @@ from app.repositories.database import Database
 from app.services.kanji import KanjiService
 
 settings = get_settings()
-logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO), format="%(asctime)s %(levelname)s %(name)s %(message)s")
+if sys.version_info[:2] != (3, 12):
+    raise RuntimeError(f"Python 3.12 is required; running {sys.version.split()[0]}")
+logging.basicConfig(
+    level=getattr(logging, settings.log_level.upper(), logging.INFO), format="%(asctime)s %(levelname)s %(name)s %(message)s"
+)
 settings.ensure_database_directory()
 db = Database(settings.database_path)
-service = KanjiService(db, AIClient(settings.openai_api_key, settings.openai_model, settings.ai_kanji_name, settings.timezone), LineClient(settings.line_channel_access_token))
+service = KanjiService(
+    db,
+    AIClient(
+        settings.openai_api_key,
+        settings.openai_model,
+        settings.ai_kanji_name,
+        settings.timezone,
+        settings.openai_timeout_seconds,
+        settings.openai_search_timeout_seconds,
+    ),
+    LineClient(settings.line_channel_access_token),
+)
 app = FastAPI(title="LINE AI Kanji")
 
 
@@ -38,7 +54,7 @@ def health():
 
 
 @app.post("/webhook")
-async def webhook(request: Request, x_line_signature: str | None = Header(default=None)):
+async def webhook(request: Request, background_tasks: BackgroundTasks, x_line_signature: str | None = Header(default=None)):
     body = await request.body()
     if not valid_signature(body, x_line_signature):
         raise HTTPException(status_code=400, detail="Invalid signature")
@@ -47,9 +63,5 @@ async def webhook(request: Request, x_line_signature: str | None = Header(defaul
     except (UnicodeDecodeError, json.JSONDecodeError):
         raise HTTPException(status_code=400, detail="Invalid JSON")
     for event in payload.get("events", []):
-        try:
-            service.handle(event)
-        except Exception:
-            logging.getLogger(__name__).exception("Webhook event processing failed")
+        background_tasks.add_task(service.handle_safely, event)
     return {"ok": True}
-
