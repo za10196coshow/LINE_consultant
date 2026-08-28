@@ -1,5 +1,3 @@
-from dataclasses import dataclass
-
 from pydantic import BaseModel, Field
 
 
@@ -15,8 +13,24 @@ class VenueSearchCriteria(BaseModel):
     requirements: str | None = None
 
 
-@dataclass(frozen=True)
-class VenueSearchResult:
-    text: str
-    source_urls: tuple[str, ...]
-    venues_found: int
+class VenueCandidate(BaseModel):
+    name: str
+    area: str | None = None
+    genre: str | None = None
+    budget: str | None = None
+    reason: str
+    url: str
+    source: str | None = None
+
+
+class VenueCandidatePayload(BaseModel):
+    candidates: list[VenueCandidate] = Field(default_factory=list, max_length=5)
+
+
+class VenueSearchResult(BaseModel):
+    candidates: list[VenueCandidate] = Field(default_factory=list, max_length=3)
+    source_urls: list[str] = Field(default_factory=list)
+
+    @property
+    def venues_found(self) -> int:
+        return len(self.candidates)

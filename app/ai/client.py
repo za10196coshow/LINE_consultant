@@ -9,8 +9,8 @@ from zoneinfo import ZoneInfo
 from openai import APIError, APITimeoutError, AuthenticationError, OpenAI, RateLimitError
 from pydantic import ValidationError
 
-from app.models import Decision, VenueSearchCriteria, VenueSearchResult
-from app.prompts.system import KANJI_PROMPT, SEARCH_PROMPT
+from app.models import Decision, VenueCandidate, VenueCandidatePayload, VenueSearchCriteria, VenueSearchResult
+from app.prompts.system import KANJI_PROMPT, SEARCH_PROMPT, VENUE_REPLY_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +126,7 @@ class AIClient:
         location = {"type": "approximate", "country": "JP", "timezone": "Asia/Tokyo"}
         if criteria.location:
             location["city"] = criteria.location
-        response = self.search_client.responses.create(
+        response = self.search_client.responses.parse(
             model=self.model,
             instructions=SEARCH_PROMPT,
             input=json.dumps(
@@ -138,20 +138,56 @@ class AIClient:
             include=["web_search_call.action.sources"],
             max_tool_calls=2,
             max_output_tokens=2200,
+            text_format=VenueCandidatePayload,
             store=False,
         )
         source_urls = _extract_source_urls(response)
-        if not source_urls:
-            logger.warning("OpenAI web search returned no verifiable source URLs")
-            return None
-        text = _remove_unverified_urls(response.output_text.strip(), set(source_urls))
-        text = _remove_unverified_candidate_sections(text, set(source_urls))
-        if not any(url in text for url in source_urls):
-            text = text.rstrip() + "\n\n参考URL\n" + "\n".join(source_urls[:3])
-        venues_found = sum(marker in text for marker in ("①", "②", "③", "④", "⑤"))
-        if venues_found == 0:
-            venues_found = min(len(source_urls), 3)
-        return VenueSearchResult(text=text, source_urls=tuple(source_urls), venues_found=venues_found)
+        parsed = response.output_parsed or VenueCandidatePayload()
+        verified: list[VenueCandidate] = []
+        for candidate in parsed.candidates:
+            if candidate.url in source_urls and candidate.url not in {item.url for item in verified}:
+                verified.append(candidate)
+            if len(verified) == 3:
+                break
+        if parsed.candidates and not verified:
+            logger.warning("OpenAI web search candidates had no matching source URLs")
+        return VenueSearchResult(candidates=verified, source_urls=source_urls)
+
+    def render_venue_reply(self, criteria: VenueSearchCriteria, candidates: list[VenueCandidate], request: str) -> str:
+        started = time.monotonic()
+        try:
+            text = self._render_venue_reply_once(criteria, candidates, request)
+        except APITimeoutError:
+            logger.warning("OpenAI venue reply timeout; retrying once")
+            try:
+                text = self._render_venue_reply_once(criteria, candidates, request)
+            except Exception as exc:
+                self._log_non_timeout_error("venue reply retry", exc, started)
+                return _venue_reply_fallback(criteria, candidates)
+        except Exception as exc:
+            self._log_non_timeout_error("venue reply", exc, started)
+            return _venue_reply_fallback(criteria, candidates)
+        if not _valid_venue_reply(text, candidates):
+            logger.warning("OpenAI venue reply failed URL/content validation; using fallback")
+            return _venue_reply_fallback(criteria, candidates)
+        return text.strip()
+
+    def _render_venue_reply_once(self, criteria: VenueSearchCriteria, candidates: list[VenueCandidate], request: str) -> str:
+        response = self.client.responses.create(
+            model=self.model,
+            instructions=VENUE_REPLY_PROMPT.format(name=self.name),
+            input=json.dumps(
+                {
+                    "request": request,
+                    "event_conditions": criteria.model_dump(exclude_none=True),
+                    "verified_candidates": [candidate.model_dump(exclude_none=True) for candidate in candidates],
+                },
+                ensure_ascii=False,
+            ),
+            max_output_tokens=1200,
+            store=False,
+        )
+        return response.output_text
 
 
 def _elapsed_ms(started: float) -> int:
@@ -192,16 +228,32 @@ def _safe_source_url(url: str) -> bool:
     return parsed.hostname.lower() not in blocked_hosts
 
 
-def _remove_unverified_urls(text: str, allowed_urls: set[str]) -> str:
-    url_pattern = re.compile(r"https?://[^\s)\]。、,;]+")
-    cleaned = url_pattern.sub(lambda match: match.group(0) if match.group(0) in allowed_urls else "", text)
-    return cleaned.replace("[]()", "").replace("()", "").strip()
+def _valid_venue_reply(text: str, candidates: list[VenueCandidate]) -> bool:
+    if not text or text.lstrip().startswith(("{", "[")):
+        return False
+    urls = re.findall(r"https?://[^\s)\]。、,;]+", text)
+    expected = [candidate.url for candidate in candidates]
+    if sorted(urls) != sorted(expected):
+        return False
+    prose = text
+    for url in urls:
+        prose = prose.replace(url, "")
+    if len(re.sub(r"[\s①②③④⑤\W]+", "", prose)) < 12:
+        return False
+    return all(candidate.name in text for candidate in candidates)
 
 
-def _remove_unverified_candidate_sections(text: str, allowed_urls: set[str]) -> str:
-    parts = re.split(r"(?=[①②③④⑤])", text)
-    candidates = [part for part in parts if part[:1] in "①②③④⑤"]
-    if not candidates or not any(any(url in part for url in allowed_urls) for part in candidates):
-        return text
-    kept = [part for part in parts if part[:1] not in "①②③④⑤" or any(url in part for url in allowed_urls)]
-    return "".join(kept).strip()
+def _venue_reply_fallback(criteria: VenueSearchCriteria, candidates: list[VenueCandidate]) -> str:
+    if not candidates:
+        return "今の条件だと、これって店がうまく拾えなかった🙏\n駅を少し広げるか、予算をちょい上げて探してみる？"
+    if len(candidates) == 1:
+        item = candidates[0]
+        detail = item.reason or item.area or item.budget or "今の条件にはわりと合いそう"
+        return f"条件に合いそうなの、今のところここが一番よさそう。\n\n{item.name}\n{detail}\n{item.url}\n\nもう少し広げて探してみる？"
+    intro_area = f"{criteria.location}で" if criteria.location else "条件に合わせて"
+    lines = [f"{intro_area}見てみたけど、このへん良さそう！"]
+    for index, item in enumerate(candidates, start=1):
+        detail = item.reason or item.budget or item.area or "みんなで行く候補によさそう"
+        lines.extend(["", f"{'①②③'[index - 1]} {item.name}", detail, item.url])
+    lines.extend(["", "俺なら①かな。この候補でみんなに聞いてみる？"])
+    return "\n".join(lines)

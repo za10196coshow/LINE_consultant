@@ -1,6 +1,6 @@
 from app.ai.client import OpenAITimeoutExhausted
 from app.main import service
-from app.models import Action, Availability, Decision, Fact, PreferenceUpdate, VenueSearchResult
+from app.models import Action, Availability, Decision, Fact, PreferenceUpdate, VenueCandidate, VenueSearchResult
 
 
 def test_root(client):
@@ -101,10 +101,18 @@ def test_search_action(post_webhook, event_factory, monkeypatch):
         service.ai,
         "search",
         lambda *_: VenueSearchResult(
-            "① 店A https://example.com/a\n② 店B https://example.com/b\n③ 店C https://example.com/c",
-            ("https://example.com/a", "https://example.com/b", "https://example.com/c"),
-            3,
+            candidates=[
+                VenueCandidate(name="店A", reason="駅近", url="https://example.com/a"),
+                VenueCandidate(name="店B", reason="落ち着く", url="https://example.com/b"),
+                VenueCandidate(name="店C", reason="ワイワイ", url="https://example.com/c"),
+            ],
+            source_urls=["https://example.com/a", "https://example.com/b", "https://example.com/c"],
         ),
+    )
+    monkeypatch.setattr(
+        service.ai,
+        "render_venue_reply",
+        lambda *_: "このへん良さそう！\n① 店A 説明 https://example.com/a\n② 店B 説明 https://example.com/b\n③ 店C 説明 https://example.com/c",
     )
     post_webhook(event_factory(text="実際に行ける場所を探して"))
     assert all(marker in replies[0] for marker in ("①", "②", "③"))
@@ -156,8 +164,12 @@ def test_shop_search_uses_saved_event_preferences(post_webhook, event_factory, m
         service.ai,
         "search",
         lambda criteria, request: captured.append((criteria, request))
-        or VenueSearchResult("① 店A\nhttps://venue.example/a", ("https://venue.example/a",), 1),
+        or VenueSearchResult(
+            candidates=[VenueCandidate(name="店A", reason="駅近", url="https://venue.example/a")],
+            source_urls=["https://venue.example/a"],
+        ),
     )
+    monkeypatch.setattr(service.ai, "render_venue_reply", lambda *_: "店Aは駅近。\nhttps://venue.example/a")
     monkeypatch.setattr(service.line, "push", lambda *_: True)
 
     assert post_webhook(event_factory(text="店探して")).status_code == 200
@@ -181,3 +193,17 @@ def test_area_preference_does_not_call_web_search(post_webhook, event_factory, m
     monkeypatch.setattr(service.ai, "search", lambda *_: (_ for _ in ()).throw(AssertionError("must not search")))
 
     assert post_webhook(event_factory(text="横浜がいい")).status_code == 200
+
+
+def test_web_search_failure_pushes_natural_message_without_raw_error(post_webhook, event_factory, monkeypatch):
+    pushes = []
+    monkeypatch.setattr(service.line, "display_name", lambda *_: "A")
+    monkeypatch.setattr(service.ai, "decide", lambda *_: Decision(action=Action.SEARCH_VENUE, search_required=True))
+    monkeypatch.setattr(service.ai, "search", lambda *_: None)
+    monkeypatch.setattr(service.line, "push", lambda target, text: pushes.append(text))
+
+    assert post_webhook(event_factory(text="店探して")).status_code == 200
+    assert "もう一回" in pushes[0]
+    assert "APITimeoutError" not in pushes[0]
+    assert "{" not in pushes[0]
+    assert "http" not in pushes[0]

@@ -81,11 +81,13 @@ class KanjiService:
             )
             search_result = self.ai.search(criteria, message_text)
             if search_result:
-                logger.info("web_search completed venues_found=%d", search_result.venues_found)
-                reply = search_result.text
+                logger.info("SEARCH_VENUE candidates=%d", search_result.venues_found)
+                logger.info("SEARCH_VENUE rendering reply")
+                reply = self.ai.render_venue_reply(criteria, search_result.candidates, message_text)
+                logger.info("SEARCH_VENUE reply generated")
             else:
                 logger.warning("web_search failed after retry")
-                reply = "今ちょっと店検索うまくいかなかった🙏\nもう一回『店探して』って呼んで"
+                reply = "ごめん、今ちょっと店検索だけうまくいかなかった🙏\nもう一回やってみる？"
         if decision.reply_required and reply:
             self.line.push(conversation_id, reply)
         logger.info("Event processing complete elapsed_ms=%d", round((time.monotonic() - started) * 1000))
