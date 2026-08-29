@@ -5,7 +5,7 @@ from app.models import MessageRoute
 from app.repositories.database import Database
 from app.services.conversation_assistant import ConversationAssistant
 from app.services.kanji import KanjiService
-from app.services.routing import MessageRouter, is_weather_candidate
+from app.services.routing import MessageRouter, has_latent_need_signal, is_weather_candidate
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +37,9 @@ class ResponseCoordinator:
         )
         logger.info("MESSAGE_ROUTING route=%s", route.value)
         logger.info(
-            "CONVERSATION_INPUT_CLASSIFIED route=%s weather_candidate=%s",
+            "CONVERSATION_INPUT_CLASSIFIED route=%s latent_need_signal=%s weather_candidate=%s",
             route.value,
+            str(has_latent_need_signal(message.get("text", ""))).lower(),
             str(is_weather_candidate(message.get("text", ""))).lower(),
         )
         if route == MessageRoute.ORGANIZER:

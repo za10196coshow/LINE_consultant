@@ -33,6 +33,14 @@ services:
         value: 0.78
       - key: CONVERSATION_PROACTIVE_THRESHOLD
         value: 0.65
+      - key: CONVERSATION_NEED_CONFIDENCE_THRESHOLD
+        value: 0.60
+      - key: CONVERSATION_EXPECTED_HELPFULNESS_THRESHOLD
+        value: 0.70
+      - key: CONVERSATION_INTRUSIVENESS_RISK_MAX
+        value: 0.45
+      - key: CONVERSATION_INTERVENTION_SCORE_THRESHOLD
+        value: 0.25
       - key: DATABASE_PATH
         value: /opt/render/project/src/data/kanji.db
       - key: LINE_CHANNEL_SECRET

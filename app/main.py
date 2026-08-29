@@ -64,6 +64,10 @@ conversation_assistant = ConversationAssistant(
     settings.unanswered_question_delay_messages,
     settings.conversation_assistant_confidence_threshold,
     settings.conversation_proactive_threshold,
+    settings.conversation_need_confidence_threshold,
+    settings.conversation_expected_helpfulness_threshold,
+    settings.conversation_intrusiveness_risk_max,
+    settings.conversation_intervention_score_threshold,
 )
 coordinator = ResponseCoordinator(db, service.line, service, conversation_assistant)
 app = FastAPI(title="LINE AI Kanji")

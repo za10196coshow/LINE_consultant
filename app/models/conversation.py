@@ -67,6 +67,14 @@ class ConversationDecision(BaseModel):
     intrusiveness_risk: float = Field(default=1.0, ge=0.0, le=1.0)
     help_type: HelpType = HelpType.NONE
     help_level: HelpLevel = HelpLevel.NONE
+    latent_need: str | None = None
+    need_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    urgency: float = Field(default=0.0, ge=0.0, le=1.0)
+    actionability: float = Field(default=0.0, ge=0.0, le=1.0)
+    information_needed: list[str] = Field(default_factory=list, max_length=8)
+    external_research_needed: bool = False
+    suggested_action: str | None = None
+    need_category: str | None = None
 
     @model_validator(mode="after")
     def normalize(self):
@@ -78,6 +86,13 @@ class ConversationDecision(BaseModel):
             self.web_search_required = True
         if self.help_level == HelpLevel.WEB_RESEARCH:
             self.web_search_required = True
+        if self.external_research_needed:
+            self.web_search_required = True
+        if self.action in {ConversationAction.POTENTIAL_NEED, ConversationAction.PROACTIVE_HELP}:
+            if self.need_confidence == 0:
+                self.need_confidence = self.confidence
+            if self.actionability == 0:
+                self.actionability = self.expected_helpfulness
         return self
 
 

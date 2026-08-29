@@ -106,11 +106,22 @@ def test_proactive_decision_schema_keeps_helpfulness_and_search_intent():
         intrusiveness_risk=0.18,
         help_type=HelpType.WEATHER,
         help_level=HelpLevel.WEB_RESEARCH,
+        latent_need="明日の天気を知って外出準備を判断したい",
+        need_confidence=0.87,
+        urgency=0.45,
+        actionability=0.95,
+        information_needed=["location", "weather_forecast"],
+        external_research_needed=True,
+        suggested_action="天気を調べて傘や服装を短く助言する",
+        need_category="weather",
     )
 
     assert decision.expected_helpfulness == 0.91
     assert decision.intrusiveness_risk == 0.18
     assert decision.web_search_required is True
+    assert decision.latent_need == "明日の天気を知って外出準備を判断したい"
+    assert decision.need_confidence == 0.87
+    assert decision.information_needed == ["location", "weather_forecast"]
 
 
 def test_budget_limit_blocks_proactive_analysis_before_openai_call():

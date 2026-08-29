@@ -92,6 +92,10 @@ pytest -q
 | `UNANSWERED_QUESTION_DELAY_MESSAGES` | 任意 | `1`。未回答とみなすまでの後続メッセージ数 |
 | `CONVERSATION_ASSISTANT_CONFIDENCE_THRESHOLD` | 任意 | `0.78`。自発介入に必要な信頼度 |
 | `CONVERSATION_PROACTIVE_THRESHOLD` | 任意 | `0.65`。潜在ニーズへの先回り支援に必要な信頼度・期待有用性 |
+| `CONVERSATION_NEED_CONFIDENCE_THRESHOLD` | 任意 | `0.60`。潜在ニーズが存在する確度の下限 |
+| `CONVERSATION_EXPECTED_HELPFULNESS_THRESHOLD` | 任意 | `0.70`。介入で役立つ見込みの下限 |
+| `CONVERSATION_INTRUSIVENESS_RISK_MAX` | 任意 | `0.45`。許容する割り込みリスクの上限 |
+| `CONVERSATION_INTERVENTION_SCORE_THRESHOLD` | 任意 | `0.25`。総合介入スコアの下限 |
 | `DATABASE_PATH` | 任意 | `data/kanji.db` |
 | `AI_KANJI_NAME` | 任意 | `幹事` |
 | `LOG_LEVEL` | 任意 | `INFO` |
@@ -139,9 +143,9 @@ Renderのサービス実行ファイルシステムは一時的です。再デ�
 
 既存のAI幹事は飲み会、イベント、日程、参加可否、店舗検索を担当します。別モジュールのConversation Assistantはイベントの有無に依存せず、旅行、学校、仕事、ゲーム、端末設定、日常相談などグループ全体の会話を対象にします。`ResponseCoordinator`が1メッセージを `ORGANIZER / CONVERSATION_ASSISTANT / NO_ACTION` のどれか一つへ送り、二重返信を防ぎます。
 
-Conversation Assistantは明示的な質問だけでなく、空腹、天気、遅刻、交通、充電、行動候補、道迷い、安全上の心配などの潜在ニーズも分析します。期待有用性が高く、割り込みの迷惑が小さいと判断した場合だけ短く先回りして助けます。天気・交通・営業時間など最新性が必要な内容はWeb Searchで確認し、検索結果は共通キャラクターの自然な返信へ整形します。単なる「眠い」「暑い」などの雑談や相づちは軽量フィルタで原則無視します。
+Conversation Assistantは固定カテゴリへ振り分けるBotではなく、会話から「今どんな助けを必要としていそうか」を`latent_need`として自由に推論します。需要の確度、期待有用性、割り込みリスク、緊急度、実行可能性から総合介入スコアを計算し、役立つ見込みが高い場合だけ見切り発車で短く助けます。最新情報が必要な場合だけWeb Searchし、結果は共通キャラクターの自然な助言へ整形します。
 
-「ありがとう」「了解」「笑」などはコードの軽量フィルタでOpenAIへ送らず記録だけ行います。日程・参加・店舗検索はOrganizerへ、質問、困りごと、認識のズレ、最新情報の依頼はConversation Assistantへ送ります。曖昧な雑談は原則黙り、未解決issueがある間だけ後続発言を分析して、人間が回答したか、まだ未解決かを確認します。
+「ありがとう」「了解」「笑」など明白な相づちはコードの軽量フィルタでOpenAIへ送らず記録だけ行います。Organizer対象以外の自然文は原則Conversation Assistantの1回の分析へ送り、未知の潜在ニーズをRoutingで捨てません。介入価値がなければStructured OutputでNoActionになり、検索や返信生成の追加API呼び出しは行いません。
 
 Conversation AssistantはStructured Outputで `NO_ACTION / ANSWER_QUESTION / CLARIFY_CONFLICT / SUMMARIZE_STATE / RESOLVE_ISSUE / REQUEST_MISSING_INFO / UNANSWERED_QUESTION / WEB_RESEARCH / FACT_CHECK / POTENTIAL_NEED / PROACTIVE_HELP` を判定します。信頼度、期待有用性、割り込みリスク、回答中の人間、同一issueへの過去介入、解決済み状態、グループ単位のcooldownを確認してPushします。Bot名などの明示呼びかけに加え、別トピック、高重要度、安全上の問題はcooldown中でも介入できます。
 

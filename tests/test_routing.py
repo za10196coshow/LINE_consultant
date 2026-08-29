@@ -14,7 +14,7 @@ from app.services.routing import MessageRouter
         ("明日の天気どう？", MessageRoute.CONVERSATION_ASSISTANT),
         ("11時じゃない？", MessageRoute.CONVERSATION_ASSISTANT),
         ("ありがとう", MessageRoute.NO_ACTION),
-        ("今日めっちゃ眠い", MessageRoute.NO_ACTION),
+        ("今日めっちゃ眠い", MessageRoute.CONVERSATION_ASSISTANT),
         ("お腹すいたなー", MessageRoute.CONVERSATION_ASSISTANT),
         ("明日の天気なんだろ", MessageRoute.CONVERSATION_ASSISTANT),
         ("遅刻しそう", MessageRoute.CONVERSATION_ASSISTANT),
@@ -56,4 +56,19 @@ def test_natural_weather_questions_pass_filter_and_route_to_assistant(message):
 
 
 def test_weather_comment_without_need_can_stay_no_action():
-    assert MessageRouter().route("天気いいね") == MessageRoute.NO_ACTION
+    assert MessageRouter().route("天気いいね") == MessageRoute.CONVERSATION_ASSISTANT
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "これ高すぎない？",
+        "子ども飽きてきた",
+        "プレゼント何買ったらいいか全然決まらん",
+        "終電大丈夫かな",
+        "充電ない",
+        "暇だな、何しよう",
+    ],
+)
+def test_unknown_or_implicit_needs_are_sent_to_llm_analysis(message):
+    assert MessageRouter().route(message) == MessageRoute.CONVERSATION_ASSISTANT

@@ -1,3 +1,5 @@
+import pytest
+
 from app.ai.budget import ApiBudget, ApiBudgetExceeded
 from app.models import (
     ConversationAction,
@@ -96,6 +98,13 @@ def proactive_decision(
         issue_type="POTENTIAL_NEED",
         summary=summary,
         web_search_required=web,
+        latent_need=summary,
+        need_confidence=confidence,
+        urgency=0.4,
+        actionability=helpfulness,
+        external_research_needed=web,
+        suggested_action=reply or "必要な情報を確認して短く助言する",
+        need_category=help_type.value,
     )
 
 
@@ -346,7 +355,14 @@ def test_different_topic_can_bypass_cooldown():
 
 
 def test_natural_weather_monologue_with_context_location_forces_web_search_and_character_reply():
-    service, db, ai, line = make_service([ConversationDecision()])
+    weather = proactive_decision(
+        HelpType.WEATHER,
+        "明日の天気を知って外出準備を判断したい",
+        None,
+        web=True,
+        level=HelpLevel.WEB_RESEARCH,
+    )
+    service, db, ai, line = make_service([weather])
     db.ensure_group("G1", "group")
     db.add_message("G1", None, "U2", "U2", "横浜駅に着いた", "place1", 1)
     ai.research_result = ConversationResearch(answer_summary="午後から雨", sources=[])
@@ -354,36 +370,56 @@ def test_natural_weather_monologue_with_context_location_forces_web_search_and_c
 
     service.handle(event("weather-natural", "明日天気何かなー？"))
 
-    assert ai.research_calls[0][1]["weather_location"] == "横浜駅"
+    assert ai.calls[0][2]["recent_messages"][0]["message_text"] == "横浜駅に着いた"
+    assert ai.research_calls[0][1]["latent_need"] == "明日の天気を知って外出準備を判断したい"
     assert line.pushes == [("G1", ai.rendered)]
     issue = db.open_conversation_issues("G1")[0]
-    assert issue["issue_type"] == "WEATHER_NEED"
-    assert issue["summary"].endswith("|横浜駅")
+    assert issue["issue_type"] == "POTENTIAL_NEED"
+    assert "外出準備" in issue["summary"]
 
 
 def test_natural_weather_monologue_without_location_asks_naturally_without_search():
-    service, db, ai, line = make_service([ConversationDecision()])
+    weather = proactive_decision(
+        HelpType.WEATHER,
+        "明日の天気を知りたいが場所が不明",
+        "どこの天気？ 場所わかれば見てみるよ。",
+    )
+    service, db, ai, line = make_service([weather])
 
     service.handle(event("weather-unknown", "明日天気何かなー"))
 
     assert ai.research_calls == []
     assert line.pushes == [("G1", "どこの天気？ 場所わかれば見てみるよ。")]
-    assert db.open_conversation_issues("G1")[0]["issue_type"] == "WEATHER_NEED"
+    assert db.open_conversation_issues("G1")[0]["issue_type"] == "POTENTIAL_NEED"
 
 
 def test_weather_location_is_resolved_from_current_message_first():
-    service, _, ai, line = make_service([ConversationDecision(action=ConversationAction.WEB_RESEARCH)])
+    weather = proactive_decision(
+        HelpType.WEATHER,
+        "横浜の明日の天気を知って外出準備を判断したい",
+        None,
+        web=True,
+        level=HelpLevel.WEB_RESEARCH,
+    )
+    service, _, ai, line = make_service([weather])
     ai.research_result = ConversationResearch(answer_summary="晴れ", sources=[])
     ai.rendered = "明日の横浜は晴れそう。昼なら出かけやすそうだよ。"
 
     service.handle(event("weather-current", "明日の横浜の天気何かなー？"))
 
-    assert ai.research_calls[0][1]["weather_location"] == "横浜"
+    assert ai.research_calls[0][0] == "明日の横浜の天気何かなー？"
     assert line.pushes
 
 
 def test_weather_location_uses_saved_active_event_area():
-    service, db, ai, line = make_service([ConversationDecision()])
+    weather = proactive_decision(
+        HelpType.WEATHER,
+        "明日の天気を知って外出準備を判断したい",
+        None,
+        web=True,
+        level=HelpLevel.WEB_RESEARCH,
+    )
+    service, db, ai, line = make_service([weather])
     db.ensure_group("G1", "group")
     event_id = db.create_event("G1", "週末のお出かけ")
     participant_id = db.ensure_participant(event_id, "U1", "U1")
@@ -397,13 +433,20 @@ def test_weather_location_uses_saved_active_event_area():
 
     service.handle(event("weather-event", "明日天気何かなー？"))
 
-    assert ai.research_calls[0][1]["weather_location"] == "横浜"
+    assert ai.calls[0][2]["event_context"]["preferences"]["area"] == "横浜"
     assert line.pushes
 
 
 def test_new_weather_topic_bypasses_food_cooldown_but_same_weather_is_duplicate():
     food = proactive_decision(HelpType.FOOD, "食事が必要", "近くで探す？", helpfulness=0.75, risk=0.3)
-    service, db, ai, line = make_service([food, ConversationDecision(), ConversationDecision()])
+    weather = proactive_decision(
+        HelpType.WEATHER,
+        "明日の横浜の天気を知りたい",
+        None,
+        web=True,
+        level=HelpLevel.WEB_RESEARCH,
+    )
+    service, db, ai, line = make_service([food, weather, weather])
     db.ensure_group("G1", "group")
     db.add_message("G1", None, "U2", "U2", "横浜駅に着いた", "place2", 1)
     ai.research_result = ConversationResearch(answer_summary="雨", sources=[])
@@ -415,3 +458,73 @@ def test_new_weather_topic_bypasses_food_cooldown_but_same_weather_is_duplicate(
 
     assert len(line.pushes) == 2
     assert len(ai.research_calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("text", "latent_need", "reply"),
+    [
+        ("お腹すいたなー", "食事をしたいか、何を食べるか決めたい", "近くでなんか探す？ 今いる場所分かれば見れるよ。"),
+        ("遅刻しそう", "移動・到着時刻・相手への連絡に困っている", "先に遅れそうって一言入れとくのがよさそう。"),
+        ("充電ない", "端末を使い続けるためにバッテリーを延命したい", "低電力モードと画面暗めで少し延命できるよ。"),
+        ("これ高すぎない？", "価格が妥当か確認し、安い代替案も知りたい", "相場と比べてみる？ 商品名分かれば近い候補も見れるよ。"),
+        (
+            "プレゼント何買ったらいいか全然決まらん",
+            "相手に合うプレゼント選びを手伝ってほしい",
+            "相手の年代と好きなもの分かれば、候補一緒に絞れるよ。",
+        ),
+    ],
+)
+def test_free_form_latent_needs_are_not_limited_to_fixed_categories(text, latent_need, reply):
+    decision = proactive_decision(HelpType.OTHER, latent_need, reply, helpfulness=0.82, risk=0.2)
+    decision.need_category = "free_form"
+    service, db, _, line = make_service([decision], cooldown=0)
+
+    service.handle(event(f"latent-{abs(hash(text))}", text))
+
+    assert line.pushes == [("G1", reply)]
+    assert db.open_conversation_issues("G1")[0]["summary"] == latent_need
+
+
+def test_child_boredom_uses_outing_context_for_free_form_need():
+    decision = proactive_decision(
+        HelpType.OTHER,
+        "外出先で子どもが楽しめる次の行動を見つけたい",
+        "近くで子どもが遊べるところ探す？ 今いる渋谷周辺で見れるよ。",
+        helpfulness=0.9,
+        risk=0.15,
+    )
+    service, db, ai, line = make_service([decision])
+    db.ensure_group("G1", "group")
+    db.add_message("G1", None, "U2", "U2", "今渋谷に着いた", "outing-context", 1)
+
+    service.handle(event("child-bored", "子ども飽きてきた"))
+
+    assert ai.calls[0][2]["recent_messages"][0]["message_text"] == "今渋谷に着いた"
+    assert line.pushes
+
+
+@pytest.mark.parametrize("text", ["暇だな", "眠い"])
+def test_weak_latent_need_can_be_analyzed_but_stay_no_action(text):
+    service, db, _, line = make_service([ConversationDecision()])
+
+    service.handle(event(f"weak-{text}", text))
+
+    assert line.pushes == []
+    assert db.open_conversation_issues("G1") == []
+
+
+def test_intervention_score_combines_need_helpfulness_intrusiveness_urgency_and_actionability():
+    decision = proactive_decision(
+        HelpType.SAFETY,
+        "眠い状態で運転する危険を避けたい",
+        "そのまま運転は危ない。安全な場所でいったん休もう。",
+        confidence=0.9,
+        helpfulness=0.95,
+        risk=0.05,
+        level=HelpLevel.ACTIVE_SUPPORT,
+    )
+    decision.urgency = 1.0
+    decision.actionability = 1.0
+    service, _, _, _ = make_service([decision])
+
+    assert service._intervention_score(decision) > 0.8

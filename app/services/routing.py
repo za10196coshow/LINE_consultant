@@ -22,6 +22,11 @@ _POTENTIAL_NEED = re.compile(
 )
 _WEATHER_WORD = re.compile(r"(天気|雨|晴れ|雪|気温|暑(?:い|く)|寒(?:い|く)|傘)")
 _WEATHER_QUESTION = re.compile(r"(かな(?:あ|ー*)?|だろ(?:う)?|なんだろ|どうだろ|かね|どう|何|いる|降る|晴れる|[?？])")
+_LATENT_NEED_CUE = re.compile(
+    r"(かな(?:あ|ー*)?|だろ(?:う)?|かも|気になる|困|悩|迷|分から|わから|決まら|できな|間に合わ|"
+    r"足りな|なくな|ない|ほしい|欲しい|したい|しそう|すぎ(?:る|ない)?|やば|飽き|退屈|"
+    r"高すぎ|安い|代わり|どうしよう|何しよう|[?？])"
+)
 
 
 class MessageRouter:
@@ -33,13 +38,7 @@ class MessageRouter:
             return MessageRoute.ORGANIZER
         if has_active_event and re.search(r"(行け|無理|空いて|場所|予算|横浜|新宿|渋谷|何時|何日|どんな感じ)", text):
             return MessageRoute.ORGANIZER
-        if is_weather_candidate(text):
-            return MessageRoute.CONVERSATION_ASSISTANT
-        if _WEATHER_WORD.search(text) and not _ASSISTANT.search(_WEATHER_WORD.sub("", text)):
-            return MessageRoute.CONVERSATION_ASSISTANT if has_open_issues else MessageRoute.NO_ACTION
-        if _ASSISTANT.search(text) or _POTENTIAL_NEED.search(text) or has_open_issues:
-            return MessageRoute.CONVERSATION_ASSISTANT
-        return MessageRoute.NO_ACTION
+        return MessageRoute.CONVERSATION_ASSISTANT
 
 
 def is_explicit_assistant_call(message: str, bot_name: str) -> bool:
@@ -55,3 +54,8 @@ def is_weather_candidate(message: str) -> bool:
     if re.search(r"(天気いいね|いい天気|晴れてよかった|雨すごかった)", compact):
         return False
     return bool(_WEATHER_QUESTION.search(compact) or re.search(r"(今日|明日|明後日|週末|今夜|午後|朝|夜)", compact))
+
+
+def has_latent_need_signal(message: str) -> bool:
+    compact = re.sub(r"\s+", "", message)
+    return bool(_ASSISTANT.search(compact) or _POTENTIAL_NEED.search(compact) or _LATENT_NEED_CUE.search(compact))
