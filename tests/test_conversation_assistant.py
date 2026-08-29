@@ -114,6 +114,36 @@ def proactive_decision(
     )
 
 
+def clarification_decision(goal, latent_need, question, blocking, *, partial_reply=None):
+    return ConversationDecision(
+        action=ConversationAction.ASK_CLARIFICATION,
+        reply_required=True,
+        confidence=0.88,
+        expected_helpfulness=0.86,
+        intrusiveness_risk=0.12,
+        latent_need=latent_need,
+        need_confidence=0.86,
+        urgency=0.45,
+        actionability=0.82,
+        friction_signal=0.8,
+        user_goal=goal,
+        known_facts=["目的地候補がある"],
+        missing_information=list(blocking),
+        blocking_missing_information=list(blocking),
+        can_answer_without_clarification=False,
+        clarification_question=question,
+        reply_text=partial_reply or question,
+        top_intent_confidence=0.62,
+        research_ready=False,
+        external_research_needed=True,
+        web_search_required=True,
+        suggested_action="最重要の不足情報を一つ確認する",
+        need_category="navigation",
+        help_type=HelpType.NAVIGATION,
+        help_level=HelpLevel.LIGHT,
+    )
+
+
 def make_service(decisions, *, delay_messages=1, cooldown=20):
     db = Database(":memory:")
     line = FakeLine()
@@ -603,3 +633,116 @@ def test_discomfort_and_friction_generalize_beyond_health(text, latent_need, rep
     service.handle(event(f"friction-{abs(hash(text))}", text))
 
     assert line.pushes == [("G1", reply)]
+
+
+def test_ambiguous_station_location_asks_clarification_without_search_failure():
+    decision = clarification_decision(
+        "品川駅の所在地か、現在地からの行き方を知りたい",
+        "品川駅へ行くための情報が必要",
+        "品川駅そのものの場所？ それとも今いるところからの行き方？",
+        ["question_intent_or_current_location"],
+        partial_reply="品川駅自体は東京都港区にある駅だよ。今いる場所からの行き方が知りたい感じ？",
+    )
+    service, _, ai, line = make_service([decision])
+
+    service.handle(event("station-ambiguous", "困った。品川駅がどこか分からない"))
+
+    assert ai.research_calls == []
+    assert "東京都港区" in line.pushes[0][1]
+    assert "調べもの" not in line.pushes[0][1]
+
+
+def test_recent_location_is_used_without_asking_where_again():
+    decision = proactive_decision(
+        HelpType.NAVIGATION,
+        "東京駅から品川駅への行き方を知りたい",
+        None,
+        web=True,
+        confidence=0.9,
+        helpfulness=0.9,
+        risk=0.1,
+        friction=0.8,
+        level=HelpLevel.WEB_RESEARCH,
+    )
+    decision.user_goal = "東京駅から品川駅へ移動する"
+    decision.known_facts = ["現在地候補は東京駅", "目的地は品川駅"]
+    decision.can_answer_without_clarification = True
+    decision.research_ready = True
+    service, db, ai, line = make_service([decision])
+    db.ensure_group("G1", "group")
+    db.add_message("G1", None, "U1", "U1", "今東京駅", "tokyo-now", 1)
+    ai.research_result = ConversationResearch(answer_summary="山手線などで移動可能", sources=[])
+    ai.rendered = "今東京駅なら、品川までは山手線で向かうのが分かりやすそう。案内表示見てみて。"
+
+    service.handle(event("station-from-tokyo", "品川駅がどこか分からない"))
+
+    assert ai.calls[0][2]["recent_messages"][0]["message_text"] == "今東京駅"
+    assert ai.research_calls
+    assert "今どこ" not in line.pushes[0][1]
+
+
+def test_station_where_can_answer_without_clarification_or_search():
+    decision = proactive_decision(
+        HelpType.NAVIGATION,
+        "品川駅の所在地を知りたい",
+        "品川駅は東京都港区にある駅だよ。",
+        confidence=0.92,
+        helpfulness=0.85,
+        risk=0.1,
+        friction=0.6,
+    )
+    decision.user_goal = "品川駅の所在地を知る"
+    decision.known_facts = ["対象は品川駅"]
+    decision.can_answer_without_clarification = True
+    service, _, ai, line = make_service([decision])
+
+    service.handle(event("station-where", "品川駅ってどこ？"))
+
+    assert ai.research_calls == []
+    assert "東京都港区" in line.pushes[0][1]
+
+
+def test_station_exit_with_sufficient_intent_can_research():
+    decision = proactive_decision(
+        HelpType.NAVIGATION,
+        "品川駅構内で港南口への方向を知りたい",
+        None,
+        web=True,
+        confidence=0.92,
+        helpfulness=0.9,
+        risk=0.1,
+        friction=0.8,
+        level=HelpLevel.WEB_RESEARCH,
+    )
+    decision.user_goal = "品川駅の港南口へ出る"
+    decision.known_facts = ["品川駅にいる", "目的地は港南口"]
+    decision.can_answer_without_clarification = True
+    decision.research_ready = True
+    service, _, ai, line = make_service([decision])
+    ai.research_result = ConversationResearch(answer_summary="港南口への案内", sources=[])
+    ai.rendered = "中央改札を出たら港南口の案内を追えば大丈夫そう。"
+
+    service.handle(event("station-exit", "品川駅の港南口どっち？"))
+
+    assert ai.research_calls
+    assert line.pushes
+
+
+@pytest.mark.parametrize(
+    ("text", "goal", "question", "blocking"),
+    [
+        ("遅刻しそう", "目的地への到着と遅刻連絡を助ける", "どこ向かってる？", ["destination"]),
+        ("明日傘いるかな", "明日の天気から傘が必要か判断する", "明日どのへん行く予定？", ["location"]),
+        ("これ高すぎない？", "価格の妥当性を確認する", "何の値段？", ["priced_item"]),
+        ("道分からない", "目的地までの行き方を知る", "どこ行きたい？", ["destination"]),
+        ("子ども飽きてきた", "近くで子どもが楽しめる行動を探す", "今どのへんいる？", ["location"]),
+    ],
+)
+def test_generic_blocking_information_asks_only_one_minimal_question(text, goal, question, blocking):
+    decision = clarification_decision(goal, goal, question, blocking)
+    service, _, ai, line = make_service([decision], cooldown=0)
+
+    service.handle(event(f"clarify-{abs(hash(text))}", text))
+
+    assert ai.research_calls == []
+    assert line.pushes == [("G1", question)]

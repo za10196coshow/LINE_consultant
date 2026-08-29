@@ -26,10 +26,10 @@ class ConversationAssistant:
         unanswered_delay_messages: int = 1,
         confidence_threshold: float = 0.78,
         proactive_threshold: float = 0.65,
-        need_confidence_threshold: float = 0.60,
-        expected_helpfulness_threshold: float = 0.70,
-        intrusiveness_risk_max: float = 0.45,
-        intervention_score_threshold: float = 0.25,
+        need_confidence_threshold: float = 0.55,
+        expected_helpfulness_threshold: float = 0.60,
+        intrusiveness_risk_max: float = 0.50,
+        intervention_score_threshold: float = 0.55,
     ):
         self.db, self.ai, self.line, self.bot_name = db, ai, line, bot_name
         self.cooldown_minutes = cooldown_minutes
@@ -59,6 +59,15 @@ class ConversationAssistant:
         context["event_context"] = self.db.context(conversation_id)
         decision = self.ai.analyze(text, display_name, context)
         decision = self._normalize_latent_decision(decision)
+        if decision.user_goal:
+            logger.info("USER_GOAL_INFERRED goal=%s", _log_value(decision.user_goal))
+        if decision.missing_information or decision.blocking_missing_information:
+            logger.info(
+                "MISSING_INFORMATION_ANALYSIS missing_count=%d blocking_count=%d blocking_fields=%s",
+                len(decision.missing_information),
+                len(decision.blocking_missing_information),
+                ",".join(_log_value(value) for value in decision.blocking_missing_information) or "none",
+            )
         self.db.add_message(
             conversation_id,
             None,
@@ -80,7 +89,11 @@ class ConversationAssistant:
             decision.issue_type or decision.action.value,
             decision.confidence,
         )
-        proactive = decision.action in {ConversationAction.POTENTIAL_NEED, ConversationAction.PROACTIVE_HELP}
+        proactive = decision.action in {
+            ConversationAction.POTENTIAL_NEED,
+            ConversationAction.PROACTIVE_HELP,
+            ConversationAction.ASK_CLARIFICATION,
+        }
         if proactive:
             score = self._intervention_score(decision)
             logger.info(
@@ -123,6 +136,9 @@ class ConversationAssistant:
             return
 
         reply = decision.reply_text
+        if decision.action == ConversationAction.ASK_CLARIFICATION:
+            logger.info("CLARIFICATION_DECISION ask=true")
+            logger.info("RESEARCH_READY=false reason=blocking_missing_information")
         if proactive:
             logger.info(
                 "INTERVENTION_DECISION intervene=true reason=useful_latent_need score=%.3f help_level=%d needs_web_search=%s",
@@ -130,17 +146,27 @@ class ConversationAssistant:
                 decision.help_level.value,
                 decision.web_search_required,
             )
-        if decision.web_search_required:
+        if decision.web_search_required and not decision.research_ready:
+            logger.info("RESEARCH_READY=false reason=missing_information")
+            reply = decision.reply_text or decision.clarification_question
+        elif decision.web_search_required:
+            logger.info("RESEARCH_READY=true")
             logger.info("WEB_SEARCH_STARTED help_type=%s", decision.help_type.value)
             research_context = self.db.conversation_context(conversation_id)
             research_context["event_context"] = self.db.context(conversation_id)
             research_context["latent_need"] = decision.latent_need
+            research_context["user_goal"] = decision.user_goal
+            research_context["known_facts"] = decision.known_facts
             research_context["information_needed"] = decision.information_needed
+            research_context["missing_information"] = decision.missing_information
             research_context["suggested_action"] = decision.suggested_action
             research = self.ai.research(text, research_context)
             if research is None:
+                logger.warning("RESEARCH_RESULT status=SEARCH_ERROR_OR_TIMEOUT")
                 reply = "ごめん、今ちょっと調べものだけうまくいかなかった🙏 もう一回聞いてみて。"
             else:
+                status = "SUCCESS" if research.sources else "NO_RESULTS"
+                logger.info("RESEARCH_RESULT status=%s sources=%d", status, len(research.sources))
                 reply = self.ai.render_research_reply(text, research)
                 logger.info("CHARACTER_REPLY_GENERATED")
         if reply:
@@ -148,6 +174,8 @@ class ConversationAssistant:
                 self.db.mark_conversation_issue_notified(int(issue["id"]))
                 logger.info("PROACTIVE_HELP_REPLY_SENT" if proactive else "CONVERSATION_ASSISTANT_REPLY_SENT")
                 logger.info("LINE_REPLY_SENT")
+                if decision.action == ConversationAction.ASK_CLARIFICATION:
+                    logger.info("CLARIFICATION_REPLY_SENT")
             else:
                 logger.warning("CONVERSATION_ASSISTANT_SKIPPED reason=line_push_failed")
 
@@ -186,7 +214,7 @@ class ConversationAssistant:
             ConversationAction.POTENTIAL_NEED,
         }:
             decision.action = ConversationAction.PROACTIVE_HELP
-        if decision.action == ConversationAction.PROACTIVE_HELP:
+        if decision.action in {ConversationAction.PROACTIVE_HELP, ConversationAction.ASK_CLARIFICATION}:
             decision.need_confidence = decision.need_confidence or decision.confidence
             decision.actionability = decision.actionability or decision.expected_helpfulness
             decision.web_search_required = decision.web_search_required or decision.external_research_needed
@@ -254,3 +282,7 @@ def _normalize(text: str) -> str:
 
 def _jst_date(value: str, timezone_info) -> str:
     return datetime.fromisoformat(value).astimezone(timezone_info).date().isoformat()
+
+
+def _log_value(value: str) -> str:
+    return re.sub(r"[\r\n\t]+", " ", value).strip()[:120]

@@ -147,9 +147,11 @@ Conversation Assistantは固定カテゴリへ振り分けるBotではなく、�
 
 明示的な質問は加点要素ですが必須条件ではありません。身体的不快、困惑、不便、焦り、不足、失敗、迷い、不安、行き詰まりを`discomfort_signal`と`friction_signal`で評価し、軽く助ける価値があれば独り言にも介入します。健康上の発言には診断をせず、深刻度に合わせた一般的で低リスクな助言に留めます。
 
+調査前には`user_goal / known_facts / missing_information / blocking_missing_information / research_ready`をStructured Outputで整理します。回答を大きく変える情報が不足している場合はWeb Searchを開始せず、`ASK_CLARIFICATION`として最重要の確認を一つだけ自然に聞きます。確実に答えられる部分があれば、短い部分回答と確認質問を組み合わせます。
+
 「ありがとう」「了解」「笑」など明白な相づちはコードの軽量フィルタでOpenAIへ送らず記録だけ行います。Organizer対象以外の自然文は原則Conversation Assistantの1回の分析へ送り、未知の潜在ニーズをRoutingで捨てません。介入価値がなければStructured OutputでNoActionになり、検索や返信生成の追加API呼び出しは行いません。
 
-Conversation AssistantはStructured Outputで `NO_ACTION / ANSWER_QUESTION / CLARIFY_CONFLICT / SUMMARIZE_STATE / RESOLVE_ISSUE / REQUEST_MISSING_INFO / UNANSWERED_QUESTION / WEB_RESEARCH / FACT_CHECK / POTENTIAL_NEED / PROACTIVE_HELP` を判定します。信頼度、期待有用性、割り込みリスク、回答中の人間、同一issueへの過去介入、解決済み状態、グループ単位のcooldownを確認してPushします。Bot名などの明示呼びかけに加え、別トピック、高重要度、安全上の問題はcooldown中でも介入できます。
+Conversation AssistantはStructured Outputで `NO_ACTION / ANSWER_QUESTION / CLARIFY_CONFLICT / SUMMARIZE_STATE / RESOLVE_ISSUE / REQUEST_MISSING_INFO / UNANSWERED_QUESTION / WEB_RESEARCH / FACT_CHECK / POTENTIAL_NEED / PROACTIVE_HELP / ASK_CLARIFICATION` を判定します。信頼度、期待有用性、割り込みリスク、回答中の人間、同一issueへの過去介入、解決済み状態、グループ単位のcooldownを確認してPushします。Bot名などの明示呼びかけに加え、別トピック、高重要度、安全上の問題はcooldown中でも介入できます。
 
 未解決事項は `conversation_issues` にtopic、種類、要約、状態、信頼度、作成・更新・解決・通知時刻とともに保存します。状態は `OPEN / RESOLVED / OBSOLETE` です。同じfingerprintのissueは重複通知せず、解決済みissueを後続メッセージごとに再生成しません。
 

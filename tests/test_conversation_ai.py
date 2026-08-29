@@ -146,6 +146,32 @@ def test_high_implicit_discomfort_can_correct_no_action_without_explicit_request
     assert decision.explicit_help_request is False
 
 
+def test_blocking_missing_information_overrides_web_search_with_clarification():
+    decision = ConversationDecision(
+        action=ConversationAction.PROACTIVE_HELP,
+        reply_required=True,
+        confidence=0.85,
+        expected_helpfulness=0.85,
+        intrusiveness_risk=0.15,
+        latent_need="現在地から目的地への行き方を知りたい",
+        need_confidence=0.85,
+        actionability=0.8,
+        user_goal="品川駅への行き方を知る",
+        known_facts=["目的地は品川駅"],
+        missing_information=["current_location"],
+        blocking_missing_information=["current_location"],
+        can_answer_without_clarification=False,
+        clarification_question="今どこにいる？",
+        external_research_needed=True,
+        web_search_required=True,
+    )
+
+    assert decision.action == ConversationAction.ASK_CLARIFICATION
+    assert decision.research_ready is False
+    assert decision.web_search_required is False
+    assert decision.reply_text == "今どこにいる？"
+
+
 def test_budget_limit_blocks_proactive_analysis_before_openai_call():
     db = Database(":memory:")
     budget = ApiBudget(db, 100, 90, 150)

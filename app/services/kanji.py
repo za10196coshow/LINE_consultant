@@ -92,6 +92,13 @@ class KanjiService:
                 criteria.budget_max or criteria.budget_min or "unknown",
                 criteria.genre or "unknown",
             )
+            if not criteria.location:
+                logger.info("RESEARCH_READY=false reason=missing_location")
+                reply = "どのへんで探す？ 場所わかれば、その近くで見てみるよ。"
+                if decision.reply_required:
+                    self.line.push(conversation_id, reply)
+                logger.info("CLARIFICATION_REPLY_SENT")
+                return
             try:
                 search_result = self.ai.search(criteria, message_text)
             except ApiBudgetExceeded:

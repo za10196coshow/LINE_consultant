@@ -21,6 +21,7 @@ class ConversationAction(str, Enum):
     FACT_CHECK = "FACT_CHECK"
     POTENTIAL_NEED = "POTENTIAL_NEED"
     PROACTIVE_HELP = "PROACTIVE_HELP"
+    ASK_CLARIFICATION = "ASK_CLARIFICATION"
 
 
 class HelpType(str, Enum):
@@ -78,9 +79,30 @@ class ConversationDecision(BaseModel):
     explicit_help_request: bool = False
     discomfort_signal: float = Field(default=0.0, ge=0.0, le=1.0)
     friction_signal: float = Field(default=0.0, ge=0.0, le=1.0)
+    user_goal: str | None = None
+    known_facts: list[str] = Field(default_factory=list, max_length=12)
+    missing_information: list[str] = Field(default_factory=list, max_length=12)
+    blocking_missing_information: list[str] = Field(default_factory=list, max_length=6)
+    can_answer_without_clarification: bool = True
+    clarification_question: str | None = None
+    top_intent_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    research_ready: bool = False
 
     @model_validator(mode="after")
     def normalize(self):
+        clarification_needed = (
+            bool(self.latent_need or self.user_goal)
+            and bool(self.blocking_missing_information)
+            and not self.can_answer_without_clarification
+            and bool(self.clarification_question or self.reply_text)
+        )
+        if self.action == ConversationAction.ASK_CLARIFICATION or clarification_needed:
+            self.action = ConversationAction.ASK_CLARIFICATION
+            self.reply_required = True
+            self.reply_text = self.reply_text or self.clarification_question
+            self.external_research_needed = False
+            self.web_search_required = False
+            self.research_ready = False
         implicit_need_is_actionable = (
             bool(self.latent_need)
             and (self.discomfort_signal >= 0.6 or self.friction_signal >= 0.65)
@@ -101,7 +123,17 @@ class ConversationDecision(BaseModel):
             self.web_search_required = True
         if self.external_research_needed:
             self.web_search_required = True
-        if self.action in {ConversationAction.POTENTIAL_NEED, ConversationAction.PROACTIVE_HELP}:
+        if self.action == ConversationAction.ASK_CLARIFICATION:
+            self.web_search_required = False
+            self.external_research_needed = False
+            self.research_ready = False
+        elif self.web_search_required:
+            self.research_ready = not self.blocking_missing_information and self.can_answer_without_clarification
+        if self.action in {
+            ConversationAction.POTENTIAL_NEED,
+            ConversationAction.PROACTIVE_HELP,
+            ConversationAction.ASK_CLARIFICATION,
+        }:
             if self.need_confidence == 0:
                 self.need_confidence = self.confidence
             if self.actionability == 0:

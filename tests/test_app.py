@@ -97,7 +97,16 @@ def test_search_action(post_webhook, event_factory, monkeypatch):
     replies = []
     monkeypatch.setattr(service.line, "display_name", lambda *_: "A")
     monkeypatch.setattr(service.line, "push", lambda target, text: replies.append(text))
-    monkeypatch.setattr(service.ai, "decide", lambda *_: Decision(action=Action.SEARCH, search_required=True, create_event=True))
+    monkeypatch.setattr(
+        service.ai,
+        "decide",
+        lambda *_: Decision(
+            action=Action.SEARCH,
+            search_required=True,
+            create_event=True,
+            preference_update=PreferenceUpdate(area="横浜"),
+        ),
+    )
     monkeypatch.setattr(
         service.ai,
         "search",
@@ -199,7 +208,16 @@ def test_area_preference_does_not_call_web_search(post_webhook, event_factory, m
 def test_web_search_failure_pushes_natural_message_without_raw_error(post_webhook, event_factory, monkeypatch):
     pushes = []
     monkeypatch.setattr(service.line, "display_name", lambda *_: "A")
-    monkeypatch.setattr(service.ai, "decide", lambda *_: Decision(action=Action.SEARCH_VENUE, search_required=True))
+    monkeypatch.setattr(
+        service.ai,
+        "decide",
+        lambda *_: Decision(
+            action=Action.SEARCH_VENUE,
+            search_required=True,
+            create_event=True,
+            preference_update=PreferenceUpdate(area="横浜"),
+        ),
+    )
     monkeypatch.setattr(service.ai, "search", lambda *_: None)
     monkeypatch.setattr(service.line, "push", lambda target, text: pushes.append(text))
 
@@ -208,6 +226,21 @@ def test_web_search_failure_pushes_natural_message_without_raw_error(post_webhoo
     assert "APITimeoutError" not in pushes[0]
     assert "{" not in pushes[0]
     assert "http" not in pushes[0]
+
+
+def test_shop_search_without_location_asks_once_without_web_search(post_webhook, event_factory, monkeypatch):
+    pushes = []
+    monkeypatch.setattr(service.line, "display_name", lambda *_: "A")
+    monkeypatch.setattr(
+        service.ai,
+        "decide",
+        lambda *_: Decision(action=Action.SEARCH_VENUE, search_required=True, create_event=True),
+    )
+    monkeypatch.setattr(service.ai, "search", lambda *_: (_ for _ in ()).throw(AssertionError("must not search")))
+    monkeypatch.setattr(service.line, "push", lambda target, text: pushes.append(text) or True)
+
+    assert post_webhook(event_factory(text="店探して")).status_code == 200
+    assert pushes == ["どのへんで探す？ 場所わかれば、その近くで見てみるよ。"]
 
 
 def test_budget_limit_pushes_fixed_message_once_without_other_ai_calls(post_webhook, event_factory, monkeypatch):

@@ -66,7 +66,7 @@ class ConversationAIClient:
                 instructions=CONVERSATION_ASSISTANT_PROMPT.format(name=self.name),
                 input=json.dumps(payload, ensure_ascii=False, default=str),
                 text_format=ConversationDecision,
-                max_output_tokens=1400,
+                max_output_tokens=1800,
                 store=False,
             ),
         )
