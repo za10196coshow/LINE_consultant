@@ -7,7 +7,7 @@ from difflib import SequenceMatcher
 from app.ai.budget import ApiBudgetExceeded
 from app.ai.conversation import ConversationAIClient
 from app.line.client import LineClient
-from app.models import ConversationAction, HelpLevel, HelpType, IssueStatus
+from app.models import ConversationAction, ConversationDecision, HelpLevel, HelpType, IssueStatus
 from app.repositories.database import Database
 from app.services.routing import is_explicit_assistant_call, lightweight_need_signals
 
@@ -59,7 +59,8 @@ class ConversationAssistant:
         explicit = is_explicit_assistant_call(text, self.bot_name)
         context = self.db.conversation_context(conversation_id)
         context["event_context"] = self.db.context(conversation_id)
-        context["lightweight_need_signals"] = lightweight_need_signals(text)
+        signals = lightweight_need_signals(text)
+        context["lightweight_need_signals"] = signals
         context["active_topics"] = self.db.active_conversation_topics(
             conversation_id,
             user_id,
@@ -72,6 +73,7 @@ class ConversationAssistant:
                 logger.info("PENDING_QUESTION_FOUND question_type=%s", active.get("pending_question_type") or "general")
         decision = self.ai.analyze(text, display_name, context)
         decision = self._normalize_latent_decision(decision)
+        decision = self._recover_strong_implicit_need(decision, signals)
         if decision.user_goal:
             logger.info("USER_GOAL_INFERRED goal=%s", _log_value(decision.user_goal))
         if decision.missing_information or decision.blocking_missing_information:
@@ -306,6 +308,37 @@ class ConversationAssistant:
             decision.actionability = decision.actionability or decision.expected_helpfulness
             decision.web_search_required = decision.web_search_required or decision.external_research_needed
         return decision
+
+    def _recover_strong_implicit_need(self, decision, signals: dict[str, bool]):
+        if decision.action != ConversationAction.NO_ACTION or not signals.get("hunger_need"):
+            return decision
+        logger.info("LATENT_NEED_RECOVERED reason=strong_hunger_signal original_action=NO_ACTION")
+        return ConversationDecision(
+            action=ConversationAction.PROACTIVE_HELP,
+            reply_required=True,
+            confidence=0.75,
+            reason="明示的な質問ではないが、食事を必要としている可能性が高い",
+            reply_text="お腹空いたね。すぐ作る・買う・近くで探すなら、どれがいい？",
+            topic="食事をどうするか",
+            issue_type="POTENTIAL_NEED",
+            summary="食事を取りたい潜在ニーズ",
+            expected_helpfulness=0.78,
+            intrusiveness_risk=0.18,
+            help_type=HelpType.FOOD,
+            help_level=HelpLevel.LIGHT,
+            latent_need="何か食べたい、または食事方法を決めたい",
+            need_confidence=0.78,
+            actionability=0.82,
+            need_category="food",
+            discomfort_signal=0.45,
+            friction_signal=0.35,
+            user_goal="今の状況に合う食事方法を決める",
+            suggested_action="作る・買う・近くで探す選択肢を短く確認する",
+            pending_question="すぐ作る・買う・近くで探すなら、どれがいい？",
+            pending_question_type="CHOICE",
+            pending_options=["作る", "買う", "近くで探す"],
+            expected_response_types=["選択肢", "希望"],
+        )
 
     def _intervention_score(self, decision) -> float:
         score = (

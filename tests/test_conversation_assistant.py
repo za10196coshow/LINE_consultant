@@ -928,3 +928,16 @@ def test_natural_hunger_statement_reaches_latent_analysis_and_gets_light_help():
     assert ai.calls[0][2]["lightweight_need_signals"]["potential_need_language"] is True
     assert decision.explicit_help_request is False
     assert line.pushes == [("G1", decision.reply_text)]
+
+
+def test_natural_hunger_statement_recovers_when_model_returns_no_action():
+    service, db, ai, line = make_service([ConversationDecision()])
+
+    service.handle(event("hunger-ne-recovery", "お腹空いたねー"))
+
+    assert len(ai.calls) == 1
+    assert line.pushes
+    assert "お腹空いた" in line.pushes[0][1]
+    assert "どれがいい" in line.pushes[0][1]
+    topics = db.active_conversation_topics("G1", "U1", 60)
+    assert topics[0]["pending_options"] == ["作る", "買う", "近くで探す"]

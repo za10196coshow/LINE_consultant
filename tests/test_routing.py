@@ -1,7 +1,7 @@
 import pytest
 
 from app.models import MessageRoute
-from app.services.routing import MessageRouter, has_latent_need_signal
+from app.services.routing import MessageRouter, has_latent_need_signal, lightweight_need_signals
 
 
 @pytest.mark.parametrize(
@@ -85,3 +85,4 @@ def test_explicit_organizer_request_wins_over_active_conversation_topic():
 def test_natural_hunger_variants_are_strong_lightweight_signals(message):
     assert MessageRouter().route(message) == MessageRoute.CONVERSATION_ASSISTANT
     assert has_latent_need_signal(message) is True
+    assert lightweight_need_signals(message)["hunger_need"] is True

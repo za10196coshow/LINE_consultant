@@ -77,6 +77,13 @@ def lightweight_need_signals(message: str) -> dict[str, bool]:
     compact = re.sub(r"\s+", "", message)
     return {
         "potential_need_language": has_latent_need_signal(compact),
+        "hunger_need": bool(
+            re.search(
+                r"(?:お腹|腹|小腹)(?:が)?(?:空|す)(?:い|いた|いて|いてきた|きた|く)|"
+                r"腹(?:減った|へった)|なんか食べたい|何食べよう|ご飯どうしよう",
+                compact,
+            )
+        ),
         "explicit_question_mark": bool(re.search(r"[?？]", compact)),
         "statement_style": not bool(re.search(r"[?？]", compact)),
     }
