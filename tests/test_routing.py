@@ -33,3 +33,27 @@ def test_open_issue_routes_followup_to_conversation_assistant():
 
 def test_active_event_routes_event_preference_to_organizer():
     assert MessageRouter().route("横浜がいい", has_active_event=True) == MessageRoute.ORGANIZER
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "明日天気何かなー？",
+        "明日天気何かなー",
+        "明日天気どうなんだろ",
+        "明日雨かな",
+        "明日晴れるかな",
+        "雨降るかな",
+        "傘いるかなー",
+        "明日暑い？",
+        "明日寒いかな",
+        "天気どうだろ",
+        "週末雨かな",
+    ],
+)
+def test_natural_weather_questions_pass_filter_and_route_to_assistant(message):
+    assert MessageRouter().route(message) == MessageRoute.CONVERSATION_ASSISTANT
+
+
+def test_weather_comment_without_need_can_stay_no_action():
+    assert MessageRouter().route("天気いいね") == MessageRoute.NO_ACTION

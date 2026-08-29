@@ -1,7 +1,7 @@
 import hashlib
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 
 from app.ai.budget import ApiBudgetExceeded
@@ -9,7 +9,7 @@ from app.ai.conversation import ConversationAIClient
 from app.line.client import LineClient
 from app.models import ConversationAction, HelpLevel, HelpType, IssueStatus
 from app.repositories.database import Database
-from app.services.routing import is_explicit_assistant_call
+from app.services.routing import is_explicit_assistant_call, is_weather_candidate
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,15 @@ class ConversationAssistant:
         text = message.get("text", "")
         explicit = is_explicit_assistant_call(text, self.bot_name)
         context = self.db.conversation_context(conversation_id)
+        weather_candidate = is_weather_candidate(text)
+        weather_location, location_source = self._resolve_weather_location(text, context, conversation_id)
+        if weather_candidate:
+            logger.info("WEATHER_LOCATION_RESOLUTION source=%s", location_source)
+            context["weather_location"] = weather_location
+            context["event_context"] = self.db.context(conversation_id).get("event")
         decision = self.ai.analyze(text, display_name, context)
+        if weather_candidate:
+            decision = self._normalize_weather_decision(decision, weather_location, text)
         self.db.add_message(
             conversation_id,
             None,
@@ -80,11 +88,13 @@ class ConversationAssistant:
             )
             threshold = 0.55 if explicit else self.proactive_threshold
             if decision.confidence < threshold or not decision.reply_required or not self._proactive_helpful(decision):
-                logger.info("PROACTIVE_HELP_SKIPPED reason=low_helpfulness")
+                reason = "low_confidence" if decision.confidence < threshold else "low_helpfulness"
+                logger.info("PROACTIVE_HELP_DECISION intervene=false reason=%s", reason)
+                logger.info("PROACTIVE_HELP_SKIPPED reason=%s", reason)
                 return
         issue = self._save_issue(conversation_id, message_id, decision)
         if issue["status"] != IssueStatus.OPEN.value or issue.get("last_notified_at"):
-            logger.info("CONVERSATION_ASSISTANT_SKIPPED reason=duplicate_or_resolved")
+            logger.info("PROACTIVE_HELP_SKIPPED reason=duplicate" if proactive else "CONVERSATION_ASSISTANT_SKIPPED reason=duplicate")
             return
         threshold = 0.55 if explicit else self.confidence_threshold
         if not proactive and (decision.confidence < threshold or not decision.reply_required):
@@ -98,26 +108,32 @@ class ConversationAssistant:
             return
         bypass_cooldown = self._can_bypass_cooldown(conversation_id, decision)
         if not explicit and not bypass_cooldown and self._cooldown_active(conversation_id):
-            logger.info("CONVERSATION_ASSISTANT_SKIPPED reason=cooldown")
+            logger.info("PROACTIVE_HELP_SKIPPED reason=cooldown" if proactive else "CONVERSATION_ASSISTANT_SKIPPED reason=cooldown")
             return
 
         reply = decision.reply_text
         if proactive:
             logger.info(
-                "PROACTIVE_HELP_DECISION intervene=true level=%d needs_web_search=%s",
+                "PROACTIVE_HELP_DECISION intervene=true reason=helpful_need level=%d needs_web_search=%s",
                 decision.help_level.value,
                 decision.web_search_required,
             )
         if decision.web_search_required:
-            research = self.ai.research(text, self.db.conversation_context(conversation_id))
+            logger.info("WEB_SEARCH_STARTED help_type=%s", decision.help_type.value)
+            research_context = self.db.conversation_context(conversation_id)
+            if weather_candidate:
+                research_context["weather_location"] = weather_location
+            research = self.ai.research(text, research_context)
             if research is None:
                 reply = "ごめん、今ちょっと調べものだけうまくいかなかった🙏 もう一回聞いてみて。"
             else:
                 reply = self.ai.render_research_reply(text, research)
+                logger.info("CHARACTER_REPLY_GENERATED")
         if reply:
             if self.line.push(conversation_id, reply):
                 self.db.mark_conversation_issue_notified(int(issue["id"]))
                 logger.info("PROACTIVE_HELP_REPLY_SENT" if proactive else "CONVERSATION_ASSISTANT_REPLY_SENT")
+                logger.info("LINE_REPLY_SENT")
             else:
                 logger.warning("CONVERSATION_ASSISTANT_SKIPPED reason=line_push_failed")
 
@@ -150,6 +166,54 @@ class ConversationAssistant:
     def _proactive_helpful(self, decision) -> bool:
         return decision.expected_helpfulness >= self.proactive_threshold and decision.intrusiveness_risk <= 0.55
 
+    def _normalize_weather_decision(self, decision, location: str | None, text: str):
+        decision.action = ConversationAction.PROACTIVE_HELP
+        decision.reply_required = True
+        decision.confidence = max(decision.confidence, 0.7)
+        decision.expected_helpfulness = max(decision.expected_helpfulness, 0.85)
+        decision.intrusiveness_risk = min(decision.intrusiveness_risk, 0.3)
+        decision.help_type = HelpType.WEATHER
+        decision.help_level = HelpLevel.WEB_RESEARCH if location else HelpLevel.LIGHT
+        decision.web_search_required = bool(location)
+        target = self._weather_target_key(text)
+        decision.topic = f"WEATHER:{target}:{location or 'UNKNOWN'}"
+        decision.issue_type = "WEATHER_NEED"
+        decision.summary = f"WEATHER|{target}|{location or 'UNKNOWN'}"
+        if not location:
+            decision.reply_text = "どこの天気？ 場所わかれば見てみるよ。"
+        return decision
+
+    def _weather_target_key(self, text: str) -> str:
+        now = datetime.now(self.ai.budget.timezone).date()
+        if "明後日" in text:
+            return (now + timedelta(days=2)).isoformat()
+        if "明日" in text:
+            return (now + timedelta(days=1)).isoformat()
+        if "今日" in text or "今夜" in text:
+            return now.isoformat()
+        if "週末" in text:
+            days_to_saturday = (5 - now.weekday()) % 7
+            return f"{(now + timedelta(days=days_to_saturday)).isoformat()}_WEEKEND"
+        return "UNSPECIFIED"
+
+    def _resolve_weather_location(self, text: str, context: dict, group_id: str) -> tuple[str | None, str]:
+        current = _location_from_text(text, require_context_phrase=False)
+        if current:
+            return current, "current_message"
+        for item in reversed(context.get("recent_messages", [])[-6:]):
+            found = _location_from_text(item.get("message_text", ""), require_context_phrase=True)
+            if found:
+                return found, "context"
+        for issue in context.get("open_issues", []):
+            found = _location_from_text(issue.get("summary", ""), require_context_phrase=True)
+            if found:
+                return found, "topic_context"
+        event_context = self.db.context(group_id)
+        area = event_context.get("preferences", {}).get("area")
+        if area:
+            return str(area), "event"
+        return None, "unknown"
+
     def _can_bypass_cooldown(self, group_id: str, decision) -> bool:
         last_topic = self.db.last_conversation_assistant_topic(group_id)
         return (
@@ -163,6 +227,7 @@ class ConversationAssistant:
         try:
             self.handle(event)
         except ApiBudgetExceeded:
+            logger.info("PROACTIVE_HELP_SKIPPED reason=budget_limit")
             conversation_id = _conversation_id(event)
             if conversation_id:
                 date_jst = self.ai.budget.date_jst
@@ -179,3 +244,19 @@ def _conversation_id(event: dict) -> str | None:
 
 def _normalize(text: str) -> str:
     return re.sub(r"[\W_]+", "", text).lower()
+
+
+def _location_from_text(text: str, *, require_context_phrase: bool) -> str | None:
+    compact = re.sub(r"\s+", "", text)
+    patterns = [
+        r"(?:今日|明日|明後日|週末)?(?:の)?([一-龥ァ-ヶ]{2,10}(?:都|道|府|県|市|区|町|村|駅))(?:の)?(?:天気|雨|晴れ|雪|気温)",
+        r"([一-龥ァ-ヶ]{2,10})の(?:今日|明日|明後日|週末)(?:の)?(?:天気|雨|晴れ|雪|気温)",
+        r"([一-龥ァ-ヶ]{2,10}(?:都|道|府|県|市|区|町|村|駅))(?:にいる|に着いた|へ行く|で集合|周辺)",
+    ]
+    if not require_context_phrase:
+        patterns.append(r"([一-龥ァ-ヶ]{2,10})(?:の)(?:天気|雨|晴れ|雪|気温)")
+    for pattern in patterns:
+        match = re.search(pattern, compact)
+        if match:
+            return match.group(1)
+    return None

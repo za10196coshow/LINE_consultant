@@ -1,5 +1,14 @@
 from app.ai.budget import ApiBudget, ApiBudgetExceeded
-from app.models import ConversationAction, ConversationDecision, ConversationResearch, HelpLevel, HelpType, ResearchSource
+from app.models import (
+    ConversationAction,
+    ConversationDecision,
+    ConversationResearch,
+    Decision,
+    HelpLevel,
+    HelpType,
+    PreferenceUpdate,
+    ResearchSource,
+)
 from app.repositories.database import Database
 from app.services.conversation_assistant import ConversationAssistant
 
@@ -33,6 +42,7 @@ class QueueAI:
         self.calls = []
         self.budget = ApiBudget(db, 100, 90, 150)
         self.research_result = None
+        self.research_calls = []
         self.rendered = None
 
     def analyze(self, message, display_name, context):
@@ -41,6 +51,7 @@ class QueueAI:
         return item(context) if callable(item) else item
 
     def research(self, message, context):
+        self.research_calls.append((message, context))
         return self.research_result
 
     def render_research_reply(self, message, research):
@@ -332,3 +343,75 @@ def test_different_topic_can_bypass_cooldown():
     service.handle(event("battery2", "充電やばい", "U2"))
 
     assert len(line.pushes) == 2
+
+
+def test_natural_weather_monologue_with_context_location_forces_web_search_and_character_reply():
+    service, db, ai, line = make_service([ConversationDecision()])
+    db.ensure_group("G1", "group")
+    db.add_message("G1", None, "U2", "U2", "横浜駅に着いた", "place1", 1)
+    ai.research_result = ConversationResearch(answer_summary="午後から雨", sources=[])
+    ai.rendered = "明日の横浜、午後ちょっと雨っぽいよ。折りたたみ持っといた方がよさそう☔"
+
+    service.handle(event("weather-natural", "明日天気何かなー？"))
+
+    assert ai.research_calls[0][1]["weather_location"] == "横浜駅"
+    assert line.pushes == [("G1", ai.rendered)]
+    issue = db.open_conversation_issues("G1")[0]
+    assert issue["issue_type"] == "WEATHER_NEED"
+    assert issue["summary"].endswith("|横浜駅")
+
+
+def test_natural_weather_monologue_without_location_asks_naturally_without_search():
+    service, db, ai, line = make_service([ConversationDecision()])
+
+    service.handle(event("weather-unknown", "明日天気何かなー"))
+
+    assert ai.research_calls == []
+    assert line.pushes == [("G1", "どこの天気？ 場所わかれば見てみるよ。")]
+    assert db.open_conversation_issues("G1")[0]["issue_type"] == "WEATHER_NEED"
+
+
+def test_weather_location_is_resolved_from_current_message_first():
+    service, _, ai, line = make_service([ConversationDecision(action=ConversationAction.WEB_RESEARCH)])
+    ai.research_result = ConversationResearch(answer_summary="晴れ", sources=[])
+    ai.rendered = "明日の横浜は晴れそう。昼なら出かけやすそうだよ。"
+
+    service.handle(event("weather-current", "明日の横浜の天気何かなー？"))
+
+    assert ai.research_calls[0][1]["weather_location"] == "横浜"
+    assert line.pushes
+
+
+def test_weather_location_uses_saved_active_event_area():
+    service, db, ai, line = make_service([ConversationDecision()])
+    db.ensure_group("G1", "group")
+    event_id = db.create_event("G1", "週末のお出かけ")
+    participant_id = db.ensure_participant(event_id, "U1", "U1")
+    db.save_decision(
+        event_id,
+        participant_id,
+        Decision(action="REMEMBER_ONLY", preference_update=PreferenceUpdate(area="横浜")),
+    )
+    ai.research_result = ConversationResearch(answer_summary="晴れ", sources=[])
+    ai.rendered = "明日の横浜は晴れそう。昼なら動きやすそうだよ。"
+
+    service.handle(event("weather-event", "明日天気何かなー？"))
+
+    assert ai.research_calls[0][1]["weather_location"] == "横浜"
+    assert line.pushes
+
+
+def test_new_weather_topic_bypasses_food_cooldown_but_same_weather_is_duplicate():
+    food = proactive_decision(HelpType.FOOD, "食事が必要", "近くで探す？", helpfulness=0.75, risk=0.3)
+    service, db, ai, line = make_service([food, ConversationDecision(), ConversationDecision()])
+    db.ensure_group("G1", "group")
+    db.add_message("G1", None, "U2", "U2", "横浜駅に着いた", "place2", 1)
+    ai.research_result = ConversationResearch(answer_summary="雨", sources=[])
+    ai.rendered = "明日の横浜は雨っぽい。傘持っとこう。"
+
+    service.handle(event("food-before-weather", "腹減った"))
+    service.handle(event("weather-first", "明日雨かな", "U2"))
+    service.handle(event("weather-repeat", "明日天気どうだろ", "U2"))
+
+    assert len(line.pushes) == 2
+    assert len(ai.research_calls) == 1

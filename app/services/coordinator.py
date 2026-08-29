@@ -5,7 +5,7 @@ from app.models import MessageRoute
 from app.repositories.database import Database
 from app.services.conversation_assistant import ConversationAssistant
 from app.services.kanji import KanjiService
-from app.services.routing import MessageRouter
+from app.services.routing import MessageRouter, is_weather_candidate
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,11 @@ class ResponseCoordinator:
             has_active_event=self.db.active_event(conversation_id) is not None,
         )
         logger.info("MESSAGE_ROUTING route=%s", route.value)
+        logger.info(
+            "CONVERSATION_INPUT_CLASSIFIED route=%s weather_candidate=%s",
+            route.value,
+            str(is_weather_candidate(message.get("text", ""))).lower(),
+        )
         if route == MessageRoute.ORGANIZER:
             self.organizer.handle_safely(event)
         elif route == MessageRoute.CONVERSATION_ASSISTANT:
@@ -64,6 +69,7 @@ class ResponseCoordinator:
             int(event.get("timestamp", 0)),
         )
         logger.info("CONVERSATION_ASSISTANT_SKIPPED reason=lightweight_filter")
+        logger.info("PROACTIVE_HELP_SKIPPED reason=pre_filter")
 
     def handle_safely(self, event: dict) -> None:
         try:

@@ -20,6 +20,8 @@ _POTENTIAL_NEED = re.compile(
     r"このあと(?:暇|どうしよう)|時間余った|駅.*(?:出口|わから|迷)|どっちから出|迷った|"
     r"眠い.*(?:運転|車)|暑すぎて.*(?:外|遊))"
 )
+_WEATHER_WORD = re.compile(r"(天気|雨|晴れ|雪|気温|暑(?:い|く)|寒(?:い|く)|傘)")
+_WEATHER_QUESTION = re.compile(r"(かな(?:あ|ー*)?|だろ(?:う)?|なんだろ|どうだろ|かね|どう|何|いる|降る|晴れる|[?？])")
 
 
 class MessageRouter:
@@ -31,6 +33,10 @@ class MessageRouter:
             return MessageRoute.ORGANIZER
         if has_active_event and re.search(r"(行け|無理|空いて|場所|予算|横浜|新宿|渋谷|何時|何日|どんな感じ)", text):
             return MessageRoute.ORGANIZER
+        if is_weather_candidate(text):
+            return MessageRoute.CONVERSATION_ASSISTANT
+        if _WEATHER_WORD.search(text) and not _ASSISTANT.search(_WEATHER_WORD.sub("", text)):
+            return MessageRoute.CONVERSATION_ASSISTANT if has_open_issues else MessageRoute.NO_ACTION
         if _ASSISTANT.search(text) or _POTENTIAL_NEED.search(text) or has_open_issues:
             return MessageRoute.CONVERSATION_ASSISTANT
         return MessageRoute.NO_ACTION
@@ -40,3 +46,12 @@ def is_explicit_assistant_call(message: str, bot_name: str) -> bool:
     compact = re.sub(r"\s+", "", message)
     cues = (bot_name, "AI", "教えて", "調べて", "まとめて", "どう思う", "これ分かる", "これわかる")
     return any(cue and cue.lower() in compact.lower() for cue in cues)
+
+
+def is_weather_candidate(message: str) -> bool:
+    compact = re.sub(r"\s+", "", message)
+    if not _WEATHER_WORD.search(compact):
+        return False
+    if re.search(r"(天気いいね|いい天気|晴れてよかった|雨すごかった)", compact):
+        return False
+    return bool(_WEATHER_QUESTION.search(compact) or re.search(r"(今日|明日|明後日|週末|今夜|午後|朝|夜)", compact))
