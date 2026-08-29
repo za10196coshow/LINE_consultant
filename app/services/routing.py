@@ -13,7 +13,8 @@ _ASSISTANT = re.compile(
     r"天気|ニュース|営業時間|運行|遅延|価格|iPhone|Android|PC|スマホ|AI|幹事)"
 )
 _POTENTIAL_NEED = re.compile(
-    r"(お腹すいた|腹減った|腹へった|なんか食べたい|何食べよう|ご飯どうしよう|ラーメン食べたい|"
+    r"((?:お腹|腹|小腹)(?:が)?(?:空|す)(?:い|いた|いて|いてきた|きた|く)|腹減った|腹へった|"
+    r"なんか食べたい|何食べよう|ご飯どうしよう|ラーメン食べたい|"
     r"天気なんだろ|雨降りそう|雨かな|傘(?:いる|持ってくれば)|暑いかな|雪大丈夫|"
     r"遅刻しそう|間に合わな|電車.*(?:止ま|遅れ)|帰りの電車あるかな|"
     r"充電(?:やば|ない)|スマホ(?:死にそう|切れそう)|バッテリー(?:やば|ない)|"
@@ -70,3 +71,12 @@ def is_weather_candidate(message: str) -> bool:
 def has_latent_need_signal(message: str) -> bool:
     compact = re.sub(r"\s+", "", message)
     return bool(_ASSISTANT.search(compact) or _POTENTIAL_NEED.search(compact) or _LATENT_NEED_CUE.search(compact))
+
+
+def lightweight_need_signals(message: str) -> dict[str, bool]:
+    compact = re.sub(r"\s+", "", message)
+    return {
+        "potential_need_language": has_latent_need_signal(compact),
+        "explicit_question_mark": bool(re.search(r"[?？]", compact)),
+        "statement_style": not bool(re.search(r"[?？]", compact)),
+    }

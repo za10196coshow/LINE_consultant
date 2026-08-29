@@ -1,7 +1,7 @@
 import pytest
 
 from app.models import MessageRoute
-from app.services.routing import MessageRouter
+from app.services.routing import MessageRouter, has_latent_need_signal
 
 
 @pytest.mark.parametrize(
@@ -79,3 +79,9 @@ def test_unknown_or_implicit_needs_are_sent_to_llm_analysis(message):
 
 def test_explicit_organizer_request_wins_over_active_conversation_topic():
     assert MessageRouter().route("9月に飲もう", has_active_topic=True) == MessageRoute.ORGANIZER
+
+
+@pytest.mark.parametrize("message", ["お腹空いたねー", "お腹が空いてきた", "小腹すいたな", "なんか食べたいね"])
+def test_natural_hunger_variants_are_strong_lightweight_signals(message):
+    assert MessageRouter().route(message) == MessageRoute.CONVERSATION_ASSISTANT
+    assert has_latent_need_signal(message) is True

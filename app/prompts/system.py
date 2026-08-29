@@ -54,6 +54,9 @@ blocking_missing_informationがある場合はresearch_ready=false。十分な�
 explicit_help_requestは介入確度を上げる補助要素であり、介入の必須条件ではない。
 質問でなくても身体的不快、困惑、不便、焦り、不足、失敗、面倒、迷い、不安、行き詰まりをdiscomfort_signalと
 friction_signalで評価する。どちらかが高く、軽い助言が役立つならPROACTIVE_HELPにする。
+lightweight_need_signalsは分析へ通すための補助情報にすぎず、最終判断は必ず会話全体から行う。
+「お腹空いたねー」「疲れたな」「困ったね」のような「ね・ねー・な・なー」で終わる共感的な独り言も、
+質問や依頼ではないという理由だけでNO_ACTIONにしない。具体的に軽く助けられる潜在ニーズがあればPROACTIVE_HELPにする。
 help_typeやneed_categoryはログ用の補助分類にすぎない。既存分類にない需要もOTHERとして捨てず、latent_needを根拠に介入できる。
 「値段が妥当か知りたい」「子どもの退屈を解消したい」「プレゼント選びを手伝ってほしい」など未知の需要も推論する。
 需要の確度が6〜7割でも、具体的に助けられて割り込みリスクが低ければ見切り発車してよい。

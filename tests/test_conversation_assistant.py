@@ -907,3 +907,24 @@ def test_active_topic_expires_after_configured_ttl():
         conn.execute("UPDATE conversation_topics SET last_activity_at=? WHERE topic_id=?", (old, topic_id))
 
     assert db.active_conversation_topics("G1", "U1", service.active_topic_ttl_minutes) == []
+
+
+def test_natural_hunger_statement_reaches_latent_analysis_and_gets_light_help():
+    decision = proactive_decision(
+        HelpType.FOOD,
+        "今すぐ何か食べたい可能性が高い",
+        "お腹空いたね。すぐ作るなら、家にあるもので早いやつ一緒に考える？",
+        confidence=0.78,
+        helpfulness=0.78,
+        risk=0.18,
+        discomfort=0.45,
+        friction=0.35,
+        level=HelpLevel.LIGHT,
+    )
+    service, _, ai, line = make_service([decision])
+
+    service.handle(event("hunger-ne", "お腹空いたねー"))
+
+    assert ai.calls[0][2]["lightweight_need_signals"]["potential_need_language"] is True
+    assert decision.explicit_help_request is False
+    assert line.pushes == [("G1", decision.reply_text)]

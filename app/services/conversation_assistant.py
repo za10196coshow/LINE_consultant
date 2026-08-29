@@ -9,7 +9,7 @@ from app.ai.conversation import ConversationAIClient
 from app.line.client import LineClient
 from app.models import ConversationAction, HelpLevel, HelpType, IssueStatus
 from app.repositories.database import Database
-from app.services.routing import is_explicit_assistant_call
+from app.services.routing import is_explicit_assistant_call, lightweight_need_signals
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +59,7 @@ class ConversationAssistant:
         explicit = is_explicit_assistant_call(text, self.bot_name)
         context = self.db.conversation_context(conversation_id)
         context["event_context"] = self.db.context(conversation_id)
+        context["lightweight_need_signals"] = lightweight_need_signals(text)
         context["active_topics"] = self.db.active_conversation_topics(
             conversation_id,
             user_id,
