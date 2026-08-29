@@ -75,9 +75,22 @@ class ConversationDecision(BaseModel):
     external_research_needed: bool = False
     suggested_action: str | None = None
     need_category: str | None = None
+    explicit_help_request: bool = False
+    discomfort_signal: float = Field(default=0.0, ge=0.0, le=1.0)
+    friction_signal: float = Field(default=0.0, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
     def normalize(self):
+        implicit_need_is_actionable = (
+            bool(self.latent_need)
+            and (self.discomfort_signal >= 0.6 or self.friction_signal >= 0.65)
+            and self.expected_helpfulness >= 0.6
+            and self.intrusiveness_risk <= 0.5
+            and bool(self.reply_text or self.external_research_needed)
+        )
+        if self.action == ConversationAction.NO_ACTION and implicit_need_is_actionable:
+            self.action = ConversationAction.PROACTIVE_HELP
+            self.reply_required = True
         if self.action == ConversationAction.NO_ACTION:
             self.reply_required = False
             self.reply_text = None

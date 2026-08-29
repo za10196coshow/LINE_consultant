@@ -92,10 +92,10 @@ pytest -q
 | `UNANSWERED_QUESTION_DELAY_MESSAGES` | 任意 | `1`。未回答とみなすまでの後続メッセージ数 |
 | `CONVERSATION_ASSISTANT_CONFIDENCE_THRESHOLD` | 任意 | `0.78`。自発介入に必要な信頼度 |
 | `CONVERSATION_PROACTIVE_THRESHOLD` | 任意 | `0.65`。潜在ニーズへの先回り支援に必要な信頼度・期待有用性 |
-| `CONVERSATION_NEED_CONFIDENCE_THRESHOLD` | 任意 | `0.60`。潜在ニーズが存在する確度の下限 |
-| `CONVERSATION_EXPECTED_HELPFULNESS_THRESHOLD` | 任意 | `0.70`。介入で役立つ見込みの下限 |
-| `CONVERSATION_INTRUSIVENESS_RISK_MAX` | 任意 | `0.45`。許容する割り込みリスクの上限 |
-| `CONVERSATION_INTERVENTION_SCORE_THRESHOLD` | 任意 | `0.25`。総合介入スコアの下限 |
+| `CONVERSATION_NEED_CONFIDENCE_THRESHOLD` | 任意 | `0.55`。潜在ニーズが存在する確度の下限 |
+| `CONVERSATION_EXPECTED_HELPFULNESS_THRESHOLD` | 任意 | `0.60`。介入で役立つ見込みの下限 |
+| `CONVERSATION_INTRUSIVENESS_RISK_MAX` | 任意 | `0.50`。許容する割り込みリスクの上限 |
+| `CONVERSATION_INTERVENTION_SCORE_THRESHOLD` | 任意 | `0.55`。総合介入スコアの下限 |
 | `DATABASE_PATH` | 任意 | `data/kanji.db` |
 | `AI_KANJI_NAME` | 任意 | `幹事` |
 | `LOG_LEVEL` | 任意 | `INFO` |
@@ -144,6 +144,8 @@ Renderのサービス実行ファイルシステムは一時的です。再デ�
 既存のAI幹事は飲み会、イベント、日程、参加可否、店舗検索を担当します。別モジュールのConversation Assistantはイベントの有無に依存せず、旅行、学校、仕事、ゲーム、端末設定、日常相談などグループ全体の会話を対象にします。`ResponseCoordinator`が1メッセージを `ORGANIZER / CONVERSATION_ASSISTANT / NO_ACTION` のどれか一つへ送り、二重返信を防ぎます。
 
 Conversation Assistantは固定カテゴリへ振り分けるBotではなく、会話から「今どんな助けを必要としていそうか」を`latent_need`として自由に推論します。需要の確度、期待有用性、割り込みリスク、緊急度、実行可能性から総合介入スコアを計算し、役立つ見込みが高い場合だけ見切り発車で短く助けます。最新情報が必要な場合だけWeb Searchし、結果は共通キャラクターの自然な助言へ整形します。
+
+明示的な質問は加点要素ですが必須条件ではありません。身体的不快、困惑、不便、焦り、不足、失敗、迷い、不安、行き詰まりを`discomfort_signal`と`friction_signal`で評価し、軽く助ける価値があれば独り言にも介入します。健康上の発言には診断をせず、深刻度に合わせた一般的で低リスクな助言に留めます。
 
 「ありがとう」「了解」「笑」など明白な相づちはコードの軽量フィルタでOpenAIへ送らず記録だけ行います。Organizer対象以外の自然文は原則Conversation Assistantの1回の分析へ送り、未知の潜在ニーズをRoutingで捨てません。介入価値がなければStructured OutputでNoActionになり、検索や返信生成の追加API呼び出しは行いません。
 

@@ -114,6 +114,9 @@ def test_proactive_decision_schema_keeps_helpfulness_and_search_intent():
         external_research_needed=True,
         suggested_action="天気を調べて傘や服装を短く助言する",
         need_category="weather",
+        explicit_help_request=False,
+        discomfort_signal=0.2,
+        friction_signal=0.1,
     )
 
     assert decision.expected_helpfulness == 0.91
@@ -122,6 +125,25 @@ def test_proactive_decision_schema_keeps_helpfulness_and_search_intent():
     assert decision.latent_need == "明日の天気を知って外出準備を判断したい"
     assert decision.need_confidence == 0.87
     assert decision.information_needed == ["location", "weather_forecast"]
+
+
+def test_high_implicit_discomfort_can_correct_no_action_without_explicit_request():
+    decision = ConversationDecision(
+        action=ConversationAction.NO_ACTION,
+        reply_text="大丈夫？ 無理せず少し休んだ方がいいかも。",
+        latent_need="腹痛への軽い対処が必要そう",
+        confidence=0.82,
+        need_confidence=0.82,
+        discomfort_signal=0.91,
+        friction_signal=0.35,
+        expected_helpfulness=0.8,
+        intrusiveness_risk=0.18,
+        actionability=0.76,
+    )
+
+    assert decision.action == ConversationAction.PROACTIVE_HELP
+    assert decision.reply_required is True
+    assert decision.explicit_help_request is False
 
 
 def test_budget_limit_blocks_proactive_analysis_before_openai_call():

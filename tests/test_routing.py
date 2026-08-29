@@ -68,6 +68,9 @@ def test_weather_comment_without_need_can_stay_no_action():
         "終電大丈夫かな",
         "充電ない",
         "暇だな、何しよう",
+        "お腹痛いなー",
+        "頭痛い",
+        "財布忘れた",
     ],
 )
 def test_unknown_or_implicit_needs_are_sent_to_llm_analysis(message):

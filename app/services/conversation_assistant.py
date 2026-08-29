@@ -84,19 +84,23 @@ class ConversationAssistant:
         if proactive:
             score = self._intervention_score(decision)
             logger.info(
-                "LATENT_NEED_ANALYSIS need_category=%s need_confidence=%.2f expected_helpfulness=%.2f "
+                "LATENT_NEED_ANALYSIS need_category=%s explicit_help_request=%s need_confidence=%.2f "
+                "discomfort_signal=%.2f friction_signal=%.2f expected_helpfulness=%.2f "
                 "intrusiveness_risk=%.2f urgency=%.2f actionability=%.2f score=%.3f",
                 decision.need_category or decision.help_type.value,
+                str(decision.explicit_help_request).lower(),
                 decision.need_confidence,
+                decision.discomfort_signal,
+                decision.friction_signal,
                 decision.expected_helpfulness,
                 decision.intrusiveness_risk,
                 decision.urgency,
                 decision.actionability,
                 score,
             )
-            reason = self._proactive_skip_reason(decision, explicit, score)
+            reason = self._proactive_skip_reason(decision, explicit or decision.explicit_help_request, score)
             if reason:
-                logger.info("PROACTIVE_HELP_DECISION intervene=false reason=%s score=%.3f", reason, score)
+                logger.info("INTERVENTION_DECISION intervene=false reason=%s score=%.3f", reason, score)
                 logger.info("PROACTIVE_HELP_SKIPPED reason=%s", reason)
                 return
         issue = self._save_issue(conversation_id, message_id, decision)
@@ -121,7 +125,7 @@ class ConversationAssistant:
         reply = decision.reply_text
         if proactive:
             logger.info(
-                "PROACTIVE_HELP_DECISION intervene=true reason=useful_latent_need score=%.3f level=%d needs_web_search=%s",
+                "INTERVENTION_DECISION intervene=true reason=useful_latent_need score=%.3f help_level=%d needs_web_search=%s",
                 self._intervention_score(decision),
                 decision.help_level.value,
                 decision.web_search_required,
@@ -189,9 +193,17 @@ class ConversationAssistant:
         return decision
 
     def _intervention_score(self, decision) -> float:
-        base = decision.need_confidence * decision.expected_helpfulness * (1 - decision.intrusiveness_risk)
-        context_factor = 0.7 + 0.15 * decision.urgency + 0.15 * decision.actionability
-        return base * context_factor
+        score = (
+            0.30 * decision.need_confidence
+            + 0.25 * decision.expected_helpfulness
+            + 0.20 * decision.actionability
+            + 0.15 * decision.discomfort_signal
+            + 0.05 * decision.friction_signal
+            + 0.10 * decision.urgency
+            - 0.15 * decision.intrusiveness_risk
+            + (0.08 if decision.explicit_help_request else 0.0)
+        )
+        return min(max(score, 0.0), 1.0)
 
     def _proactive_skip_reason(self, decision, explicit: bool, score: float) -> str | None:
         if not decision.reply_required:

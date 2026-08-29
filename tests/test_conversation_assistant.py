@@ -83,6 +83,9 @@ def proactive_decision(
     helpfulness=0.9,
     risk=0.2,
     level=HelpLevel.ADVICE,
+    discomfort=0.0,
+    friction=0.0,
+    explicit=False,
 ):
     return ConversationDecision(
         action=ConversationAction.PROACTIVE_HELP,
@@ -105,6 +108,9 @@ def proactive_decision(
         external_research_needed=web,
         suggested_action=reply or "必要な情報を確認して短く助言する",
         need_category=help_type.value,
+        explicit_help_request=explicit,
+        discomfort_signal=discomfort,
+        friction_signal=friction,
     )
 
 
@@ -525,6 +531,75 @@ def test_intervention_score_combines_need_helpfulness_intrusiveness_urgency_and_
     )
     decision.urgency = 1.0
     decision.actionability = 1.0
+    decision.discomfort_signal = 0.9
     service, _, _, _ = make_service([decision])
 
     assert service._intervention_score(decision) > 0.8
+
+
+def test_implicit_stomach_pain_gets_light_natural_help_without_web_search():
+    decision = proactive_decision(
+        HelpType.OTHER,
+        "腹痛に対する軽い対処や安心材料が必要そう",
+        "大丈夫？ とりあえず無理せずちょっと休んで、水分だけ取っといた方がいいかも。",
+        confidence=0.82,
+        helpfulness=0.80,
+        risk=0.18,
+        discomfort=0.91,
+        friction=0.35,
+        level=HelpLevel.ADVICE,
+    )
+    decision.urgency = 0.45
+    decision.actionability = 0.76
+    service, _, ai, line = make_service([decision])
+
+    service.handle(event("stomach-pain", "お腹痛いなー"))
+
+    assert decision.explicit_help_request is False
+    assert ai.research_calls == []
+    assert "休んで" in line.pushes[0][1]
+
+
+def test_explicit_stomach_pain_request_gets_priority_answer():
+    decision = proactive_decision(
+        HelpType.OTHER,
+        "腹痛への対処を知りたい",
+        "まず無理せず休もう。痛みが強くなるなら我慢せず受診も考えて。",
+        confidence=0.9,
+        helpfulness=0.88,
+        risk=0.12,
+        discomfort=0.9,
+        explicit=True,
+    )
+    service, _, _, line = make_service([decision])
+
+    service.handle(event("stomach-explicit", "お腹が痛い、どうすればいい？"))
+
+    assert line.pushes
+
+
+@pytest.mark.parametrize(
+    ("text", "latent_need", "reply", "discomfort", "friction"),
+    [
+        ("頭痛いな", "頭痛への軽い対処が必要そう", "ちょっと休んで、水分取っといた方がいいかも。", 0.85, 0.2),
+        ("充電ない", "端末を使い続けるための支援が必要", "低電力モードと画面暗めで少し延命できるよ。", 0.2, 0.85),
+        ("財布忘れた", "支払い手段や財布の回収方法を整理したい", "取りに戻れるか確認して、無理なら使える決済を先に見とこう。", 0.2, 0.9),
+        ("遅刻しそう", "移動と遅刻連絡を助けてほしい", "先に遅れそうって一言入れとくのがよさそう。", 0.25, 0.85),
+    ],
+)
+def test_discomfort_and_friction_generalize_beyond_health(text, latent_need, reply, discomfort, friction):
+    decision = proactive_decision(
+        HelpType.OTHER,
+        latent_need,
+        reply,
+        confidence=0.8,
+        helpfulness=0.78,
+        risk=0.18,
+        discomfort=discomfort,
+        friction=friction,
+    )
+    service, _, _, line = make_service([decision], cooldown=0)
+
+    service.handle(event(f"friction-{abs(hash(text))}", text))
+
+    assert line.pushes == [("G1", reply)]
