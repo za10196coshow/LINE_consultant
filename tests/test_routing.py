@@ -75,3 +75,7 @@ def test_weather_comment_without_need_can_stay_no_action():
 )
 def test_unknown_or_implicit_needs_are_sent_to_llm_analysis(message):
     assert MessageRouter().route(message) == MessageRoute.CONVERSATION_ASSISTANT
+
+
+def test_explicit_organizer_request_wins_over_active_conversation_topic():
+    assert MessageRouter().route("9月に飲もう", has_active_topic=True) == MessageRoute.ORGANIZER

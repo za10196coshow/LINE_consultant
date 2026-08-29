@@ -96,6 +96,7 @@ pytest -q
 | `CONVERSATION_EXPECTED_HELPFULNESS_THRESHOLD` | 任意 | `0.60`。介入で役立つ見込みの下限 |
 | `CONVERSATION_INTRUSIVENESS_RISK_MAX` | 任意 | `0.50`。許容する割り込みリスクの上限 |
 | `CONVERSATION_INTERVENTION_SCORE_THRESHOLD` | 任意 | `0.55`。総合介入スコアの下限 |
+| `ACTIVE_TOPIC_TTL_MINUTES` | 任意 | `60`。ユーザー単位の継続話題を保持する時間 |
 | `DATABASE_PATH` | 任意 | `data/kanji.db` |
 | `AI_KANJI_NAME` | 任意 | `幹事` |
 | `LOG_LEVEL` | 任意 | `INFO` |
@@ -148,6 +149,8 @@ Conversation Assistantは固定カテゴリへ振り分けるBotではなく、�
 明示的な質問は加点要素ですが必須条件ではありません。身体的不快、困惑、不便、焦り、不足、失敗、迷い、不安、行き詰まりを`discomfort_signal`と`friction_signal`で評価し、軽く助ける価値があれば独り言にも介入します。健康上の発言には診断をせず、深刻度に合わせた一般的で低リスクな助言に留めます。
 
 調査前には`user_goal / known_facts / missing_information / blocking_missing_information / research_ready`をStructured Outputで整理します。回答を大きく変える情報が不足している場合はWeb Searchを開始せず、`ASK_CLARIFICATION`として最重要の確認を一つだけ自然に聞きます。確実に答えられる部分があれば、短い部分回答と確認質問を組み合わせます。
+
+Bot自身の返信も`role=assistant`として履歴へ保存します。ユーザー単位のactive topicには、topic summary、user goal、known facts、open questions、pending question、提示した選択肢を保持します。次の発言がAI質問への回答なら`FOLLOW_UP`として扱い、proactive閾値やcooldownを再適用せず自然に会話を継続します。明確な別話題は新しい潜在ニーズとして処理します。
 
 「ありがとう」「了解」「笑」など明白な相づちはコードの軽量フィルタでOpenAIへ送らず記録だけ行います。Organizer対象以外の自然文は原則Conversation Assistantの1回の分析へ送り、未知の潜在ニーズをRoutingで捨てません。介入価値がなければStructured OutputでNoActionになり、検索や返信生成の追加API呼び出しは行いません。
 

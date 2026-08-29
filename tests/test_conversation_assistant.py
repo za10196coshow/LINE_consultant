@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from app.ai.budget import ApiBudget, ApiBudgetExceeded
@@ -141,6 +143,24 @@ def clarification_decision(goal, latent_need, question, blocking, *, partial_rep
         need_category="navigation",
         help_type=HelpType.NAVIGATION,
         help_level=HelpLevel.LIGHT,
+    )
+
+
+def follow_up_decision(reply, *, confidence=0.95, known_facts=None, pending_question=None, close=False):
+    return ConversationDecision(
+        action=ConversationAction.FOLLOW_UP,
+        reply_required=not close or bool(reply),
+        continuation_confidence=confidence,
+        resolved_reference="直前のAI質問への回答",
+        reply_text=reply,
+        topic_summary="すぐ作れる食事を相談中",
+        user_goal="短時間で食事を作りたい",
+        known_facts=known_facts or [],
+        open_questions=[pending_question] if pending_question else [],
+        pending_question=pending_question,
+        pending_question_type="COOKING_INGREDIENTS" if pending_question else None,
+        expected_response_types=["材料", "調理時間"] if pending_question else [],
+        close_topic=close,
     )
 
 
@@ -746,3 +766,144 @@ def test_generic_blocking_information_asks_only_one_minimal_question(text, goal,
 
     assert ai.research_calls == []
     assert line.pushes == [("G1", question)]
+
+
+def test_food_question_then_short_cook_answer_is_follow_up_with_assistant_history():
+    first = proactive_decision(
+        HelpType.FOOD,
+        "今すぐ食事を用意したい",
+        "出前にする？ それとも今すぐ買う／作る？",
+        confidence=0.82,
+        helpfulness=0.85,
+        risk=0.15,
+    )
+    first.topic_summary = "空腹で、すぐ食べられる方法を検討中"
+    first.user_goal = "今すぐ食事を用意したい"
+    first.pending_question = "出前にする？ それとも今すぐ買う／作る？"
+    first.pending_question_type = "MEAL_METHOD"
+    first.pending_options = ["DELIVERY", "BUY_NOW", "COOK_NOW"]
+    first.expected_response_types = ["選択肢"]
+
+    def second(context):
+        topic = context["active_topics"][0]
+        follow = follow_up_decision(
+            "じゃあ速攻で作れるやつにしよ。冷蔵庫に何ある？",
+            known_facts=["自炊を選択", "今すぐ作りたい"],
+            pending_question="冷蔵庫に何ある？",
+        )
+        follow.topic_id = topic["topic_id"]
+        return follow
+
+    service, db, ai, line = make_service([first, second])
+    service.handle(event("food-start", "お腹空いたなー"))
+    service.handle(event("food-cook", "今すぐ作りたいの"))
+
+    assert len(line.pushes) == 2
+    assert "冷蔵庫" in line.pushes[1][1]
+    second_context = ai.calls[1][2]
+    assert second_context["recent_messages"][-1]["role"] == "assistant"
+    assert "出前にする" in second_context["recent_messages"][-1]["message_text"]
+    assert second_context["active_topics"][0]["pending_options"] == ["DELIVERY", "BUY_NOW", "COOK_NOW"]
+    assert db.active_conversation_topics("G1", "U1", 60)[0]["known_facts"] == ["自炊を選択", "今すぐ作りたい"]
+
+
+def test_food_topic_continues_for_ingredients_then_selected_recipe():
+    first = proactive_decision(HelpType.FOOD, "食事を作りたい", "冷蔵庫に何ある？")
+    first.pending_question = "冷蔵庫に何ある？"
+    first.topic_summary = "すぐ作れる食事を相談中"
+    ingredients = follow_up_decision(
+        "それなら卵かけご飯かチャーハンが早い。どっちにする？",
+        known_facts=["卵とご飯がある"],
+        pending_question="卵かけご飯とチャーハン、どっちにする？",
+    )
+    recipe = follow_up_decision(
+        "いいね。卵炒めて、ご飯入れて、塩こしょう＋しょうゆちょいで十分うまい。",
+        known_facts=["卵とご飯がある", "チャーハンを選択"],
+    )
+    service, _, _, line = make_service([first, ingredients, recipe])
+
+    service.handle(event("cook-start", "すぐ作れるの教えて"))
+    service.handle(event("cook-eggs", "卵とご飯ならある"))
+    service.handle(event("cook-choice", "チャーハンにする"))
+
+    assert len(line.pushes) == 3
+    assert "どっちにする" in line.pushes[1][1]
+    assert "しょうゆ" in line.pushes[2][1]
+
+
+def test_active_food_topic_does_not_force_unrelated_weather_into_follow_up():
+    first = proactive_decision(HelpType.FOOD, "食事を作りたい", "何作る？")
+    first.pending_question = "何作る？"
+    weather = proactive_decision(
+        HelpType.WEATHER,
+        "明日の天気を知りたい",
+        "どのへんの天気見ればいい？",
+        confidence=0.85,
+        helpfulness=0.8,
+        risk=0.15,
+    )
+    service, _, _, line = make_service([first, weather])
+
+    service.handle(event("topic-food", "腹減った"))
+    service.handle(event("topic-weather", "そういえば明日雨かな"))
+
+    assert len(line.pushes) == 2
+    assert "天気" in line.pushes[1][1]
+
+
+@pytest.mark.parametrize(
+    ("question", "answer", "reply"),
+    [
+        ("AとBどっち？", "そっち", "じゃあBでいこ。"),
+        ("どれくらい時間ある？", "10分くらい", "10分ならすぐできるやつに絞ろう。"),
+    ],
+)
+def test_short_answer_is_understood_when_pending_question_exists(question, answer, reply):
+    first = proactive_decision(HelpType.OTHER, "選択を決めたい", question)
+    first.pending_question = question
+    first.pending_options = ["A", "B"]
+    follow = follow_up_decision(reply)
+    service, _, _, line = make_service([first, follow])
+
+    service.handle(event(f"short-q-{abs(hash(question))}", "どうしよう"))
+    service.handle(event(f"short-a-{abs(hash(answer))}", answer))
+
+    assert line.pushes[-1][1] == reply
+
+
+def test_topic_is_scoped_to_primary_user_and_can_be_closed():
+    first = proactive_decision(HelpType.FOOD, "U1の食事相談", "何作る？")
+    first.pending_question = "何作る？"
+    close = follow_up_decision("了解、また困ったら呼んで。", close=True)
+    service, db, ai, line = make_service([first, ConversationDecision(), close])
+
+    service.handle(event("user-topic", "腹減った", "U1"))
+    service.handle(event("other-user", "10分くらい", "U2"))
+    service.handle(event("close-topic", "ありがとう、もう大丈夫", "U1"))
+
+    assert ai.calls[1][2]["active_topics"] == []
+    assert db.active_conversation_topics("G1", "U1", 60) == []
+    assert line.pushes[-1][1] == "了解、また困ったら呼んで。"
+
+
+def test_active_topic_expires_after_configured_ttl():
+    service, db, _, _ = make_service([])
+    db.ensure_group("G1", "group")
+    topic_id = db.upsert_conversation_topic(
+        "G1",
+        "U1",
+        topic_id=None,
+        topic_summary="古い相談",
+        user_goal="古い相談を続ける",
+        known_facts=[],
+        open_questions=[],
+        pending_question="続ける？",
+        pending_question_type="CHOICE",
+        pending_options=["続ける", "やめる"],
+        expected_response_types=["選択肢"],
+    )
+    old = (datetime.now(timezone.utc) - timedelta(minutes=61)).isoformat()
+    with db.connect() as conn:
+        conn.execute("UPDATE conversation_topics SET last_activity_at=? WHERE topic_id=?", (old, topic_id))
+
+    assert db.active_conversation_topics("G1", "U1", service.active_topic_ttl_minutes) == []

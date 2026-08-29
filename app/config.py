@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     conversation_expected_helpfulness_threshold: float = 0.60
     conversation_intrusiveness_risk_max: float = 0.50
     conversation_intervention_score_threshold: float = 0.55
+    active_topic_ttl_minutes: int = 60
     database_path: str = "data/kanji.db"
     ai_kanji_name: str = "幹事"
     log_level: str = "INFO"

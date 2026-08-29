@@ -61,3 +61,30 @@ def test_food_venue_overlap_still_selects_only_organizer():
 
     assert len(organizer.events) == 1
     assert assistant.events == []
+
+
+def test_pending_topic_routes_trivial_short_reply_to_assistant():
+    db = Database(":memory:")
+    db.ensure_group("G1", "group")
+    db.upsert_conversation_topic(
+        "G1",
+        "U1",
+        topic_id=None,
+        topic_summary="選択中",
+        user_goal="選択肢を決める",
+        known_facts=[],
+        open_questions=["AとBどっち？"],
+        pending_question="AとBどっち？",
+        pending_question_type="CHOICE",
+        pending_options=["A", "B"],
+        expected_response_types=["選択肢"],
+    )
+    organizer = FakeHandler()
+    assistant = FakeHandler()
+    assistant.active_topic_ttl_minutes = 60
+    coordinator = ResponseCoordinator(db, FakeLine(), organizer, assistant)
+
+    coordinator.handle(event("short-follow", "うん"))
+
+    assert len(assistant.events) == 1
+    assert organizer.events == []

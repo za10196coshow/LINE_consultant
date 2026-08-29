@@ -22,6 +22,7 @@ class ConversationAction(str, Enum):
     POTENTIAL_NEED = "POTENTIAL_NEED"
     PROACTIVE_HELP = "PROACTIVE_HELP"
     ASK_CLARIFICATION = "ASK_CLARIFICATION"
+    FOLLOW_UP = "FOLLOW_UP"
 
 
 class HelpType(str, Enum):
@@ -87,6 +88,16 @@ class ConversationDecision(BaseModel):
     clarification_question: str | None = None
     top_intent_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     research_ready: bool = False
+    topic_id: str | None = None
+    topic_summary: str | None = None
+    continuation_confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    resolved_reference: str | None = None
+    pending_question: str | None = None
+    pending_question_type: str | None = None
+    pending_options: list[str] = Field(default_factory=list, max_length=8)
+    expected_response_types: list[str] = Field(default_factory=list, max_length=8)
+    open_questions: list[str] = Field(default_factory=list, max_length=8)
+    close_topic: bool = False
 
     @model_validator(mode="after")
     def normalize(self):
@@ -103,6 +114,8 @@ class ConversationDecision(BaseModel):
             self.external_research_needed = False
             self.web_search_required = False
             self.research_ready = False
+        if self.action == ConversationAction.FOLLOW_UP:
+            self.reply_required = not self.close_topic or bool(self.reply_text)
         implicit_need_is_actionable = (
             bool(self.latent_need)
             and (self.discomfort_signal >= 0.6 or self.friction_signal >= 0.65)

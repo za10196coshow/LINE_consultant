@@ -30,6 +30,7 @@ class ConversationAssistant:
         expected_helpfulness_threshold: float = 0.60,
         intrusiveness_risk_max: float = 0.50,
         intervention_score_threshold: float = 0.55,
+        active_topic_ttl_minutes: int = 60,
     ):
         self.db, self.ai, self.line, self.bot_name = db, ai, line, bot_name
         self.cooldown_minutes = cooldown_minutes
@@ -41,6 +42,7 @@ class ConversationAssistant:
         self.expected_helpfulness_threshold = expected_helpfulness_threshold
         self.intrusiveness_risk_max = intrusiveness_risk_max
         self.intervention_score_threshold = intervention_score_threshold
+        self.active_topic_ttl_minutes = active_topic_ttl_minutes
 
     def handle(self, event: dict) -> None:
         message = event.get("message", {})
@@ -57,6 +59,16 @@ class ConversationAssistant:
         explicit = is_explicit_assistant_call(text, self.bot_name)
         context = self.db.conversation_context(conversation_id)
         context["event_context"] = self.db.context(conversation_id)
+        context["active_topics"] = self.db.active_conversation_topics(
+            conversation_id,
+            user_id,
+            self.active_topic_ttl_minutes,
+        )
+        if context["active_topics"]:
+            active = context["active_topics"][0]
+            logger.info("ACTIVE_TOPIC_FOUND topic_id=%s primary_user=%s", active["topic_id"], _log_value(user_id))
+            if active.get("pending_question"):
+                logger.info("PENDING_QUESTION_FOUND question_type=%s", active.get("pending_question_type") or "general")
         decision = self.ai.analyze(text, display_name, context)
         decision = self._normalize_latent_decision(decision)
         if decision.user_goal:
@@ -82,6 +94,9 @@ class ConversationAssistant:
             self.db.resolve_conversation_issue(decision.resolves_issue_id)
         if decision.action == ConversationAction.NO_ACTION:
             logger.info("CONVERSATION_ASSISTANT_SKIPPED reason=no_action")
+            return
+        if decision.action == ConversationAction.FOLLOW_UP:
+            self._handle_follow_up(conversation_id, user_id, text, decision)
             return
 
         logger.info(
@@ -172,6 +187,8 @@ class ConversationAssistant:
         if reply:
             if self.line.push(conversation_id, reply):
                 self.db.mark_conversation_issue_notified(int(issue["id"]))
+                self.db.add_assistant_message(conversation_id, self.bot_name, reply)
+                self._update_topic_state(conversation_id, user_id, decision, reply)
                 logger.info("PROACTIVE_HELP_REPLY_SENT" if proactive else "CONVERSATION_ASSISTANT_REPLY_SENT")
                 logger.info("LINE_REPLY_SENT")
                 if decision.action == ConversationAction.ASK_CLARIFICATION:
@@ -193,6 +210,75 @@ class ConversationAssistant:
                 fingerprint = existing["fingerprint"]
                 break
         return self.db.upsert_conversation_issue(group_id, fingerprint, topic, issue_type, summary, decision.confidence, message_id)
+
+    def _handle_follow_up(self, conversation_id: str, user_id: str, text: str, decision) -> None:
+        logger.info("FOLLOW_UP_ANALYSIS continuation_confidence=%.2f", decision.continuation_confidence)
+        if decision.continuation_confidence < 0.65:
+            logger.info("FOLLOW_UP_SKIPPED reason=low_continuation_confidence")
+            return
+        logger.info("FOLLOW_UP_DECISION continue=true")
+        if not decision.topic_id:
+            topics = self.db.active_conversation_topics(conversation_id, user_id, self.active_topic_ttl_minutes)
+            if topics:
+                decision.topic_id = topics[0]["topic_id"]
+        if decision.close_topic and decision.topic_id:
+            self.db.close_conversation_topic(decision.topic_id)
+            logger.info("TOPIC_STATE_UPDATED status=CLOSED topic_id=%s", decision.topic_id)
+        reply = decision.reply_text
+        if decision.web_search_required and decision.research_ready:
+            logger.info("RESEARCH_READY=true")
+            logger.info("WEB_SEARCH_STARTED help_type=%s", decision.help_type.value)
+            research_context = self.db.conversation_context(conversation_id)
+            research_context["active_topics"] = self.db.active_conversation_topics(
+                conversation_id,
+                user_id,
+                self.active_topic_ttl_minutes,
+            )
+            research_context["latent_need"] = decision.latent_need
+            research = self.ai.research(text, research_context)
+            if research is None:
+                reply = "ごめん、今ちょっと調べものだけうまくいかなかった🙏 もう一回聞いてみて。"
+            else:
+                reply = self.ai.render_research_reply(text, research)
+        elif decision.web_search_required:
+            logger.info("RESEARCH_READY=false reason=missing_information")
+            reply = decision.reply_text or decision.clarification_question
+        if reply and self.line.push(conversation_id, reply):
+            self.db.add_assistant_message(conversation_id, self.bot_name, reply)
+            self._update_topic_state(conversation_id, user_id, decision, reply)
+            logger.info("FOLLOW_UP_REPLY_SENT")
+
+    def _update_topic_state(self, conversation_id: str, user_id: str, decision, reply: str) -> None:
+        if decision.close_topic:
+            if decision.topic_id:
+                self.db.close_conversation_topic(decision.topic_id)
+            logger.info("TOPIC_STATE_UPDATED status=CLOSED")
+            return
+        existing_topics = self.db.active_conversation_topics(conversation_id, user_id, self.active_topic_ttl_minutes)
+        existing = next((topic for topic in existing_topics if topic["topic_id"] == decision.topic_id), None)
+        known_facts = list(dict.fromkeys([*(existing or {}).get("known_facts", []), *decision.known_facts]))
+        pending_question = decision.pending_question
+        if not pending_question and reply.rstrip().endswith(("?", "？")):
+            pending_question = reply
+        topic_id = self.db.upsert_conversation_topic(
+            conversation_id,
+            user_id,
+            topic_id=decision.topic_id,
+            topic_summary=decision.topic_summary
+            or (existing or {}).get("topic_summary")
+            or decision.summary
+            or decision.latent_need
+            or decision.topic
+            or "継続中の会話",
+            user_goal=decision.user_goal or (existing or {}).get("user_goal") or decision.latent_need,
+            known_facts=known_facts,
+            open_questions=decision.open_questions,
+            pending_question=pending_question,
+            pending_question_type=decision.pending_question_type,
+            pending_options=decision.pending_options,
+            expected_response_types=decision.expected_response_types,
+        )
+        logger.info("TOPIC_STATE_UPDATED status=OPEN topic_id=%s", topic_id)
 
     def _waiting_for_human(self, issue: dict) -> bool:
         messages = self.db.conversation_messages_since_issue(int(issue["id"]))

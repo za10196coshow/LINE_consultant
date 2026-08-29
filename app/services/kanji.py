@@ -96,7 +96,8 @@ class KanjiService:
                 logger.info("RESEARCH_READY=false reason=missing_location")
                 reply = "どのへんで探す？ 場所わかれば、その近くで見てみるよ。"
                 if decision.reply_required:
-                    self.line.push(conversation_id, reply)
+                    if self.line.push(conversation_id, reply):
+                        self.db.add_assistant_message(conversation_id, self.ai.name, reply)
                 logger.info("CLARIFICATION_REPLY_SENT")
                 return
             try:
@@ -117,7 +118,8 @@ class KanjiService:
                 logger.warning("web_search failed after retry")
                 reply = "ごめん、今ちょっと店検索だけうまくいかなかった🙏\nもう一回やってみる？"
         if decision.reply_required and reply:
-            self.line.push(conversation_id, reply)
+            if self.line.push(conversation_id, reply):
+                self.db.add_assistant_message(conversation_id, self.ai.name, reply)
         logger.info("Event processing complete elapsed_ms=%d", round((time.monotonic() - started) * 1000))
 
     def handle_safely(self, event: dict) -> None:

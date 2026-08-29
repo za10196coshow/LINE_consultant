@@ -1,4 +1,6 @@
+import json
 import sqlite3
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,7 +38,7 @@ CREATE TABLE IF NOT EXISTS event_preferences (
 CREATE TABLE IF NOT EXISTS conversation_messages (
  id INTEGER PRIMARY KEY AUTOINCREMENT, group_id TEXT NOT NULL, event_id INTEGER,
  line_user_id TEXT, display_name TEXT, message_text TEXT NOT NULL, line_message_id TEXT,
- timestamp INTEGER NOT NULL, created_at TEXT NOT NULL
+ timestamp INTEGER NOT NULL, created_at TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'user'
 );
 CREATE INDEX IF NOT EXISTS idx_messages_group ON conversation_messages(group_id, id DESC);
 CREATE TABLE IF NOT EXISTS processed_messages (
@@ -77,6 +79,25 @@ CREATE TABLE IF NOT EXISTS conversation_issues (
  UNIQUE(group_id, fingerprint)
 );
 CREATE INDEX IF NOT EXISTS idx_conversation_issues_open ON conversation_issues(group_id,status,last_updated_at DESC);
+CREATE TABLE IF NOT EXISTS conversation_topics (
+ topic_id TEXT PRIMARY KEY,
+ group_id TEXT NOT NULL REFERENCES groups(id),
+ primary_user_id TEXT NOT NULL,
+ topic_summary TEXT NOT NULL,
+ user_goal TEXT,
+ known_facts TEXT NOT NULL DEFAULT '[]',
+ open_questions TEXT NOT NULL DEFAULT '[]',
+ pending_question TEXT,
+ pending_question_type TEXT,
+ pending_options TEXT NOT NULL DEFAULT '[]',
+ expected_response_types TEXT NOT NULL DEFAULT '[]',
+ status TEXT NOT NULL DEFAULT 'OPEN' CHECK(status IN ('OPEN','CLOSED')),
+ created_at TEXT NOT NULL,
+ last_activity_at TEXT NOT NULL,
+ asked_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_conversation_topics_active
+ ON conversation_topics(group_id,primary_user_id,status,last_activity_at DESC);
 """
 
 
@@ -111,6 +132,9 @@ class Database:
     def initialize(self):
         with self.connect() as conn:
             conn.executescript(SCHEMA)
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(conversation_messages)")}
+            if "role" not in columns:
+                conn.execute("ALTER TABLE conversation_messages ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
 
     def claim_message(self, event_key: str, message_id: str | None) -> bool:
         with self.connect() as conn:
@@ -175,13 +199,23 @@ class Database:
                 params.extend([now_iso(), event_id])
                 conn.execute(f"UPDATE events SET {','.join(fields)},updated_at=? WHERE id=?", params)
 
-    def add_message(self, group_id: str, event_id: int | None, user_id: str, display_name: str, text: str, message_id: str, timestamp: int):
+    def add_message(
+        self,
+        group_id: str,
+        event_id: int | None,
+        user_id: str,
+        display_name: str,
+        text: str,
+        message_id: str,
+        timestamp: int,
+        role: str = "user",
+    ):
         with self.connect() as conn:
             conn.execute(
                 "INSERT INTO conversation_messages"
-                "(group_id,event_id,line_user_id,display_name,message_text,line_message_id,timestamp,created_at) "
-                "VALUES(?,?,?,?,?,?,?,?)",
-                (group_id, event_id, user_id, display_name, text, message_id, timestamp, now_iso()),
+                "(group_id,event_id,line_user_id,display_name,message_text,line_message_id,timestamp,created_at,role) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                (group_id, event_id, user_id, display_name, text, message_id, timestamp, now_iso(), role),
             )
             conn.execute(
                 "DELETE FROM conversation_messages WHERE group_id=? AND id NOT IN "
@@ -223,12 +257,102 @@ class Database:
             recent = [
                 dict(row)
                 for row in conn.execute(
-                    "SELECT id,display_name,message_text,timestamp,created_at FROM conversation_messages "
+                    "SELECT id,role,line_user_id,display_name,message_text,timestamp,created_at FROM conversation_messages "
                     "WHERE group_id=? ORDER BY id DESC LIMIT ?",
                     (group_id, message_limit),
                 )
             ][::-1]
         return {"recent_messages": recent, "open_issues": self.open_conversation_issues(group_id)}
+
+    def add_assistant_message(self, group_id: str, display_name: str, text: str) -> None:
+        self.add_message(
+            group_id,
+            None,
+            "assistant",
+            display_name,
+            text,
+            f"assistant-{uuid.uuid4().hex}",
+            int(datetime.now(timezone.utc).timestamp() * 1000),
+            role="assistant",
+        )
+
+    def active_conversation_topics(self, group_id: str, primary_user_id: str, ttl_minutes: int) -> list[dict]:
+        cutoff = datetime.now(timezone.utc).timestamp() - ttl_minutes * 60
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM conversation_topics WHERE group_id=? AND primary_user_id=? AND status='OPEN' "
+                "ORDER BY last_activity_at DESC LIMIT 5",
+                (group_id, primary_user_id),
+            ).fetchall()
+        topics = []
+        for row in rows:
+            item = dict(row)
+            if datetime.fromisoformat(item["last_activity_at"]).timestamp() < cutoff:
+                continue
+            for key in ("known_facts", "open_questions", "pending_options", "expected_response_types"):
+                item[key] = json.loads(item[key] or "[]")
+            topics.append(item)
+        return topics
+
+    def has_active_conversation_topic(self, group_id: str, primary_user_id: str, ttl_minutes: int) -> bool:
+        return bool(self.active_conversation_topics(group_id, primary_user_id, ttl_minutes))
+
+    def upsert_conversation_topic(
+        self,
+        group_id: str,
+        primary_user_id: str,
+        *,
+        topic_id: str | None,
+        topic_summary: str,
+        user_goal: str | None,
+        known_facts: list[str],
+        open_questions: list[str],
+        pending_question: str | None,
+        pending_question_type: str | None,
+        pending_options: list[str],
+        expected_response_types: list[str],
+    ) -> str:
+        stamp = now_iso()
+        with self.connect() as conn:
+            if topic_id:
+                owner = conn.execute(
+                    "SELECT group_id,primary_user_id FROM conversation_topics WHERE topic_id=?",
+                    (topic_id,),
+                ).fetchone()
+                if owner and (owner["group_id"] != group_id or owner["primary_user_id"] != primary_user_id):
+                    topic_id = None
+            topic_id = topic_id or uuid.uuid4().hex
+            conn.execute(
+                "INSERT INTO conversation_topics(topic_id,group_id,primary_user_id,topic_summary,user_goal,known_facts,"
+                "open_questions,pending_question,pending_question_type,pending_options,expected_response_types,status,"
+                "created_at,last_activity_at,asked_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,'OPEN',?,?,?) "
+                "ON CONFLICT(topic_id) DO UPDATE SET topic_summary=excluded.topic_summary,user_goal=excluded.user_goal,"
+                "known_facts=excluded.known_facts,open_questions=excluded.open_questions,pending_question=excluded.pending_question,"
+                "pending_question_type=excluded.pending_question_type,pending_options=excluded.pending_options,"
+                "expected_response_types=excluded.expected_response_types,status='OPEN',last_activity_at=excluded.last_activity_at,"
+                "asked_at=excluded.asked_at",
+                (
+                    topic_id,
+                    group_id,
+                    primary_user_id,
+                    topic_summary,
+                    user_goal,
+                    json.dumps(known_facts, ensure_ascii=False),
+                    json.dumps(open_questions, ensure_ascii=False),
+                    pending_question,
+                    pending_question_type,
+                    json.dumps(pending_options, ensure_ascii=False),
+                    json.dumps(expected_response_types, ensure_ascii=False),
+                    stamp,
+                    stamp,
+                    stamp if pending_question else None,
+                ),
+            )
+        return topic_id
+
+    def close_conversation_topic(self, topic_id: str) -> None:
+        with self.connect() as conn:
+            conn.execute("UPDATE conversation_topics SET status='CLOSED',last_activity_at=? WHERE topic_id=?", (now_iso(), topic_id))
 
     def has_open_conversation_issues(self, group_id: str) -> bool:
         with self.connect() as conn:

@@ -30,12 +30,23 @@ _LATENT_NEED_CUE = re.compile(
 
 
 class MessageRouter:
-    def route(self, message: str, *, has_open_issues: bool = False, has_active_event: bool = False) -> MessageRoute:
+    def route(
+        self,
+        message: str,
+        *,
+        has_open_issues: bool = False,
+        has_active_event: bool = False,
+        has_active_topic: bool = False,
+    ) -> MessageRoute:
         text = re.sub(r"\s+", "", message)
-        if not text or _TRIVIAL.fullmatch(text):
-            return MessageRoute.CONVERSATION_ASSISTANT if has_open_issues else MessageRoute.NO_ACTION
+        if not text:
+            return MessageRoute.NO_ACTION
         if _ORGANIZER.search(text):
             return MessageRoute.ORGANIZER
+        if has_active_topic:
+            return MessageRoute.CONVERSATION_ASSISTANT
+        if _TRIVIAL.fullmatch(text):
+            return MessageRoute.CONVERSATION_ASSISTANT if has_open_issues else MessageRoute.NO_ACTION
         if has_active_event and re.search(r"(行け|無理|空いて|場所|予算|横浜|新宿|渋谷|何時|何日|どんな感じ)", text):
             return MessageRoute.ORGANIZER
         return MessageRoute.CONVERSATION_ASSISTANT

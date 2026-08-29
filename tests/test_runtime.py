@@ -39,3 +39,4 @@ def test_render_has_conversation_assistant_defaults():
     assert env["CONVERSATION_EXPECTED_HELPFULNESS_THRESHOLD"] == "0.6"
     assert env["CONVERSATION_INTRUSIVENESS_RISK_MAX"] == "0.5"
     assert env["CONVERSATION_INTERVENTION_SCORE_THRESHOLD"] == "0.55"
+    assert env["ACTIVE_TOPIC_TTL_MINUTES"] == "60"

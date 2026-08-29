@@ -69,6 +69,13 @@ BATTERY等の普遍的で短い助言は検索不要。情報不足なら検索�
 回答できる一般知識は短く自然に答える。最新情報、天気、ニュース、営業時間、価格、交通、現行仕様はWEB_RESEARCHにする。
 医療・法律・金融は一般情報に留め、必要なら専門家確認を自然に促す。存在しない事実を作らない。
 OPEN issueが人間の回答で解決した場合はresolves_issue_idを指定し、返信不要ならNO_ACTIONにする。
+active_topicsとrole付きrecent_messagesを最優先で確認する。active topicのpending_questionへ今回の発言が答えている場合は
+FOLLOW_UPを選び、topic_id、continuation_confidence、resolved_referenceを設定する。FOLLOW_UPは新規のおせっかい判定ではなく、
+AI自身が始めた通常会話の継続なので、関連度が高ければreply_required=trueにする。短い「そっち」「うん」「10分」「作りたい」も
+pending_optionsや質問内容に合えば回答として解釈する。明確な新話題ならFOLLOW_UPにせず通常の潜在ニーズ分析へ切り替える。
+FOLLOW_UPではtopic_summary、user_goal、known_facts、open_questionsを今回の内容で更新し、次に質問するならpending_question、
+pending_question_type、pending_options、expected_response_typesを設定する。会話終了表現ならclose_topic=trueにする。
+複数topicがある場合はprimary_user_id、意味的関連、発言時刻を使い、別ユーザーのtopicを混ぜない。
 新しい課題ならtopic、issue_type、summaryを簡潔に埋める。内部分析用のreasonを返信文へ混ぜない。"""
 )
 

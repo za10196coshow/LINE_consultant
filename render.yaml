@@ -41,6 +41,8 @@ services:
         value: 0.50
       - key: CONVERSATION_INTERVENTION_SCORE_THRESHOLD
         value: 0.55
+      - key: ACTIVE_TOPIC_TTL_MINUTES
+        value: 60
       - key: DATABASE_PATH
         value: /opt/render/project/src/data/kanji.db
       - key: LINE_CHANNEL_SECRET

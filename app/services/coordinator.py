@@ -30,10 +30,16 @@ class ResponseCoordinator:
         conversation_id = _conversation_id(event)
         if not conversation_id:
             return
+        user_id = event.get("source", {}).get("userId") or "unknown"
         route = self.router.route(
             message.get("text", ""),
             has_open_issues=self.db.has_open_conversation_issues(conversation_id),
             has_active_event=self.db.active_event(conversation_id) is not None,
+            has_active_topic=self.db.has_active_conversation_topic(
+                conversation_id,
+                user_id,
+                getattr(self.conversation_assistant, "active_topic_ttl_minutes", 60),
+            ),
         )
         logger.info("MESSAGE_ROUTING route=%s", route.value)
         logger.info(
